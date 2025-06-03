@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, ForeignKey, Table, DateTime
+from sqlalchemy import Column, Integer, String, Boolean ,Numeric, ForeignKey, Table, DateTime, LargeBinary
 from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
@@ -18,6 +18,7 @@ class User(Base):
     email = Column(String, unique=True, index=True, nullable=False)
     password = Column(String, nullable=False)
     address = Column(String, nullable=True)
+    is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     # Add this relationship
@@ -38,6 +39,7 @@ class Product(Base):
     quantity = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    media = relationship("ProductMedia", back_populates="product")
     categories = relationship("Category", secondary=product_categories, back_populates="products")
 
 class Category(Base):
@@ -47,6 +49,17 @@ class Category(Base):
     name = Column(String, nullable=False)
 
     products = relationship("Product", secondary=product_categories, back_populates="categories")
+
+class ProductMedia(Base):
+    __tablename__ = "product_media"
+    id = Column(Integer, primary_key=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    media_type = Column(String, nullable=False)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=False)  
+    data = Column(LargeBinary, nullable=False)     
+
+    product = relationship("Product", back_populates="media")
 
 class Order(Base):
     __tablename__ = "orders"

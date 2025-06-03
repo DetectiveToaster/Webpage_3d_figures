@@ -16,6 +16,21 @@ class User(UserBase):
     class Config:
         orm_mode = True
 
+class ProductMediaBase(BaseModel):
+    product_id: int
+    media_type: str
+    filename: str
+    content_type: str
+
+class ProductMediaCreate(ProductMediaBase):
+    pass
+
+class ProductMedia(ProductMediaBase):
+    id: int
+    class Config:
+        orm_mode = True
+
+
 class ProductBase(BaseModel):
     name: str
     production_cost: float
@@ -25,8 +40,12 @@ class ProductBase(BaseModel):
     depth: float
     quantity: int
 
+class ProductCreate(ProductBase):
+    pass
+
 class Product(ProductBase):
     id: int
+    media: List[ProductMedia] = []
     created_at: datetime
 
     class Config:
@@ -43,6 +62,7 @@ class Category(CategoryBase):
         orm_mode = True
 
 class OrderProductBase(BaseModel):
+    product_id: int
     quantity: int
 
 class OrderProduct(OrderProductBase):

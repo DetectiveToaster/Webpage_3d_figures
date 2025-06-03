@@ -68,6 +68,31 @@ def delete_product(db: Session, product_id: int):
         db.commit()
     return db_product
 
+# Create
+def create_product_media(db: Session, media: schemas.ProductMediaCreate):
+    db_media = models.ProductMedia(**media.dict())
+    db.add(db_media)
+    db.commit()
+    db.refresh(db_media)
+    return db_media
+
+# Read - all media for a given product
+def get_media_for_product(db: Session, product_id: int):
+    return db.query(models.ProductMedia).filter(models.ProductMedia.product_id == product_id).all()
+
+# Read - get by id
+def get_product_media_by_id(db: Session, media_id: int):
+    return db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
+
+# Delete
+def delete_product_media(db: Session, media_id: int):
+    db_media = db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
+    if db_media is None:
+        return None
+    db.delete(db_media)
+    db.commit()
+    return db_media
+
 # Category CRUD
 def create_category(db: Session, category: schemas.CategoryBase):
     db_category = models.Category(name=category.name)
