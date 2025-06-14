@@ -202,6 +202,10 @@ def read_orders(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_ses
     orders = crud.get_orders(db, skip=skip, limit=limit)
     return orders
 
+@app.post("/guest_orders/", response_model=schemas.Order)
+def create_guest_order(order: schemas.GuestOrderBase, db: Session = Depends(get_db_session)):
+    return crud.create_guest_order(db=db, order=order)
+
 # Secure endpoint to add an item to the cart
 @app.post("/cart/", response_model=schemas.Cart)
 def add_to_cart(cart: schemas.CartBase, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
@@ -211,3 +215,11 @@ def add_to_cart(cart: schemas.CartBase, db: Session = Depends(get_db_session), c
 @app.get("/cart/", response_model=List[schemas.Cart])
 def read_cart(db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
     return crud.get_cart_items(db=db, user_id=current_user.id)
+
+@app.put("/cart/{cart_id}", response_model=schemas.Cart)
+def update_cart_item(cart_id: int, quantity: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
+    return crud.update_cart_item(db, cart_id, quantity)
+
+@app.delete("/cart/{cart_id}", response_model=schemas.Cart)
+def delete_cart_item(cart_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
+    return crud.delete_cart_item(db, cart_id)

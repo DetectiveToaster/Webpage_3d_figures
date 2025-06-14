@@ -125,3 +125,18 @@ def add_to_cart(db: Session, cart: schemas.CartBase):
 
 def get_cart_items(db: Session, user_id: int):
     return db.query(models.Cart).filter(models.Cart.user_id == user_id).all()
+
+def update_cart_item(db: Session, cart_id: int, quantity: int):
+    cart_item = db.query(models.Cart).filter(models.Cart.id == cart_id).first()
+    if cart_item:
+        cart_item.quantity = quantity
+        db.commit()
+        db.refresh(cart_item)
+    return cart_item
+
+def delete_cart_item(db: Session, cart_id: int):
+    cart_item = db.query(models.Cart).filter(models.Cart.id == cart_id).first()
+    if cart_item:
+        db.delete(cart_item)
+        db.commit()
+    return cart_item
