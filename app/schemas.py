@@ -66,6 +66,7 @@ class OrderProductBase(BaseModel):
     quantity: int
 
 class OrderProduct(OrderProductBase):
+    order_id: int
     product_id: int
 
     class Config:
