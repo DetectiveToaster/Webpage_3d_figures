@@ -115,6 +115,28 @@ def create_order(db: Session, order: schemas.OrderBase):
 def get_orders(db: Session, skip: int = 0, limit: int = 10):
     return db.query(models.Order).offset(skip).limit(limit).all()
 
+def get_order(db: Session, order_id: int):
+    return db.query(models.Order).filter(models.Order.id == order_id).first()
+
+def update_order_status(db: Session, order_id: int, status: str):
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if order:
+        order.status = status
+        db.commit()
+        db.refresh(order)
+    return order
+
+def set_paypal_order_id(db: Session, order_id: int, paypal_order_id: str):
+    order = db.query(models.Order).filter(models.Order.id == order_id).first()
+    if order:
+        order.paypal_order_id = paypal_order_id
+        db.commit()
+        db.refresh(order)
+    return order
+
+def get_order_by_paypal_id(db: Session, paypal_order_id: str):
+    return db.query(models.Order).filter(models.Order.paypal_order_id == paypal_order_id).first()
+
 # Cart CRUD
 def add_to_cart(db: Session, cart: schemas.CartBase):
     db_cart = models.Cart(**cart.dict())

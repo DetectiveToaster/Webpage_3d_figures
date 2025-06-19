@@ -76,6 +76,7 @@ class OrderBase(BaseModel):
     user_id: Optional[int]
     total_cost: float
     status: str
+    paypal_order_id: Optional[str] = None
 
 class Order(OrderBase):
     id: int
@@ -102,6 +103,7 @@ class GuestOrderBase(BaseModel):
     guest_address: str
     total_cost: float
     status: str
+    paypal_order_id: Optional[str] = None
     products: List[OrderProductBase]
 
 class Token(BaseModel):
