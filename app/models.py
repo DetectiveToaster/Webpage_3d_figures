@@ -69,6 +69,7 @@ class Order(Base):
     total_cost = Column(Numeric(10, 2), nullable=False)
     date = Column(DateTime, default=datetime.utcnow)
     status = Column(String, nullable=False)
+    paypal_order_id = Column(String, nullable=True)
     
     # Fields for guest users
     guest_email = Column(String, nullable=True)

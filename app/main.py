@@ -1,13 +1,13 @@
 # app/main.py
 
-from fastapi import FastAPI, Depends, HTTPException, status, File, Form, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, status, File, Form, UploadFile, Request
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
-from . import crud, models, schemas, auth
+from . import crud, models, schemas, auth, paypal
 from .database import SessionLocal, engine
 from .auth import authenticate_user, create_access_token, get_current_active_user, admin_required
 import os
@@ -207,6 +207,41 @@ def read_orders(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_ses
 @app.post("/guest_orders/", response_model=schemas.Order)
 def create_guest_order(order: schemas.GuestOrderBase, db: Session = Depends(get_db_session)):
     return crud.create_guest_order(db=db, order=order)
+
+# PayPal integration endpoints
+@app.post("/paypal/order/{order_id}")
+def create_paypal_order(order_id: int, db: Session = Depends(get_db_session)):
+    order = crud.get_order(db, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    res = paypal.create_order(
+        amount=float(order.total_cost),
+        return_url=os.getenv("PAYPAL_RETURN_URL", "https://example.com/success"),
+        cancel_url=os.getenv("PAYPAL_CANCEL_URL", "https://example.com/cancel"),
+    )
+    crud.set_paypal_order_id(db, order_id, res.get("id"))
+    return res
+
+
+@app.post("/paypal/webhook")
+async def paypal_webhook(request: Request, db: Session = Depends(get_db_session)):
+    body = await request.json()
+    if not paypal.verify_webhook(request.headers, body):
+        raise HTTPException(status_code=400, detail="Invalid webhook")
+    event_type = body.get("event_type")
+    if event_type == "CHECKOUT.ORDER.APPROVED":
+        order_id = body["resource"]["id"]
+        order = crud.get_order_by_paypal_id(db, order_id)
+        if order:
+            crud.update_order_status(db, order.id, "APPROVED")
+    elif event_type == "PAYMENT.CAPTURE.COMPLETED":
+        related = body["resource"].get("supplementary_data", {}).get("related_ids", {})
+        order_id = related.get("order_id")
+        if order_id:
+            order = crud.get_order_by_paypal_id(db, order_id)
+            if order:
+                crud.update_order_status(db, order.id, "COMPLETED")
+    return {"status": "ok"}
 
 # Secure endpoint to add an item to the cart
 @app.post("/cart/", response_model=schemas.Cart)
