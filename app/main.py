@@ -11,8 +11,6 @@ from . import crud, models, schemas, auth
 from .database import SessionLocal, engine
 from .auth import authenticate_user, create_access_token, get_current_active_user, admin_required
 import os
-from paypalcheckoutsdk.core import PayPalHttpClient, SandboxEnvironment
-from paypalcheckoutsdk.orders import OrdersCreateRequest, OrdersCaptureRequest
 
 # Initialize the database
 models.Base.metadata.create_all(bind=engine)
@@ -35,13 +33,6 @@ def get_db_session():
     finally:
         db.close()
 
-def get_paypal_client():
-    client_id = os.getenv("PAYPAL_CLIENT_ID")
-    client_secret = os.getenv("PAYPAL_CLIENT_SECRET")
-    if not client_id or not client_secret:
-        raise RuntimeError("PayPal credentials not configured")
-    environment = SandboxEnvironment(client_id=client_id, client_secret=client_secret)
-    return PayPalHttpClient(environment)
 
 def create_admin_user():
     db = SessionLocal()
@@ -216,49 +207,6 @@ def read_orders(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_ses
 @app.post("/guest_orders/", response_model=schemas.Order)
 def create_guest_order(order: schemas.GuestOrderBase, db: Session = Depends(get_db_session)):
     return crud.create_guest_order(db=db, order=order)
-
-# -------------------- PAYPAL PAYMENTS --------------------
-
-@app.post("/payments/create-paypal-order")
-def create_paypal_order(order_id: int, db: Session = Depends(get_db_session)):
-    db_order = db.query(models.Order).filter(models.Order.id == order_id).first()
-    if not db_order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
-    request = OrdersCreateRequest()
-    request.prefer("return=representation")
-    request.request_body({
-        "intent": "CAPTURE",
-        "purchase_units": [
-            {
-                "amount": {
-                    "currency_code": "USD",
-                    "value": str(db_order.total_cost)
-                }
-            }
-        ]
-    })
-
-    client = get_paypal_client()
-    response = client.execute(request)
-    return {"orderID": response.result.id}
-
-
-@app.post("/payments/capture-paypal-order")
-def capture_paypal_order(order_id: int, paypal_order_id: str, db: Session = Depends(get_db_session)):
-    client = get_paypal_client()
-    request = OrdersCaptureRequest(paypal_order_id)
-    capture = client.execute(request)
-
-    db_order = db.query(models.Order).filter(models.Order.id == order_id).first()
-    if not db_order:
-        raise HTTPException(status_code=404, detail="Order not found")
-
-    db_order.status = "paid"
-    db.commit()
-    db.refresh(db_order)
-
-    return {"status": capture.result.status, "order_id": db_order.id}
 
 # Secure endpoint to add an item to the cart
 @app.post("/cart/", response_model=schemas.Cart)
