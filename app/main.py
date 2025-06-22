@@ -7,6 +7,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
+from pydantic import BaseModel
 from . import crud, models, schemas, auth, paypal
 from .database import SessionLocal, engine
 from .auth import authenticate_user, create_access_token, get_current_active_user, admin_required
@@ -209,6 +210,21 @@ def create_guest_order(order: schemas.GuestOrderBase, db: Session = Depends(get_
     return crud.create_guest_order(db=db, order=order)
 
 # PayPal integration endpoints
+
+class CreatePayPalOrder(BaseModel):
+    amount: float
+
+
+@app.post("/paypal/create-order")
+def paypal_create_order(payload: CreatePayPalOrder):
+    """Create a PayPal order directly from the frontend."""
+    return paypal.create_order(
+        amount=payload.amount,
+        return_url=os.getenv("PAYPAL_RETURN_URL", "https://example.com/success"),
+        cancel_url=os.getenv("PAYPAL_CANCEL_URL", "https://example.com/cancel"),
+    )
+
+
 @app.post("/paypal/order/{order_id}")
 def create_paypal_order(order_id: int, db: Session = Depends(get_db_session)):
     order = crud.get_order(db, order_id)
@@ -221,6 +237,12 @@ def create_paypal_order(order_id: int, db: Session = Depends(get_db_session)):
     )
     crud.set_paypal_order_id(db, order_id, res.get("id"))
     return res
+
+
+@app.post("/paypal/capture-order/{paypal_order_id}")
+def capture_paypal_order(paypal_order_id: str):
+    """Capture a previously created PayPal order."""
+    return paypal.capture_order(paypal_order_id)
 
 
 @app.post("/paypal/webhook")
