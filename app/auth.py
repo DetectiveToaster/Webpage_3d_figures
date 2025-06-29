@@ -3,29 +3,19 @@
 from datetime import datetime, timedelta
 from typing import Optional
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from . import schemas, models, crud
 from .database import get_db
+from .security import hash_password, verify_password
 
 # Secret key to encode the JWT tokens
 SECRET_KEY = "your_secret_key_here"  # Change this to a more secure key
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-# Function to hash a password
-def hash_password(password: str):
-    return pwd_context.hash(password)
-
-# Function to verify a password
-def verify_password(plain_password: str, hashed_password: str):
-    return pwd_context.verify(plain_password, hashed_password)
 
 # Function to create a JWT token
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
