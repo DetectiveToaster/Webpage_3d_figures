@@ -38,6 +38,8 @@ def create_guest_order(db: Session, order: schemas.GuestOrderBase):
     
     return db_order
 
+"""Product and 3D model CRUD helpers."""
+
 # Product CRUD
 def create_product(db: Session, product: schemas.ProductBase):
     db_product = models.Product(**product.dict())
@@ -69,24 +71,32 @@ def delete_product(db: Session, product_id: int):
     return db_product
 
 # Create
-def create_product_media(db: Session, media: schemas.ProductMediaCreate):
-    db_media = models.ProductMedia(**media.dict())
+def create_model3d(db: Session, model: schemas.Model3DCreate):
+    db_model = models.Model3D(**model.dict())
+    db.add(db_model)
+    db.commit()
+    db.refresh(db_model)
+    return db_model
+
+
+def create_model3d_media(db: Session, media: schemas.Model3DMediaCreate):
+    db_media = models.Model3DMedia(**media.dict())
     db.add(db_media)
     db.commit()
     db.refresh(db_media)
     return db_media
 
-# Read - all media for a given product
-def get_media_for_product(db: Session, product_id: int):
-    return db.query(models.ProductMedia).filter(models.ProductMedia.product_id == product_id).all()
 
-# Read - get by id
-def get_product_media_by_id(db: Session, media_id: int):
-    return db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
+def get_media_for_model3d(db: Session, model3d_id: int):
+    return db.query(models.Model3DMedia).filter(models.Model3DMedia.model3d_id == model3d_id).all()
 
-# Delete
-def delete_product_media(db: Session, media_id: int):
-    db_media = db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
+
+def get_model3d_media_by_id(db: Session, media_id: int):
+    return db.query(models.Model3DMedia).filter(models.Model3DMedia.id == media_id).first()
+
+
+def delete_model3d_media(db: Session, media_id: int):
+    db_media = db.query(models.Model3DMedia).filter(models.Model3DMedia.id == media_id).first()
     if db_media is None:
         return None
     db.delete(db_media)

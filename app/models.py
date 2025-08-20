@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean ,Numeric, ForeignKey, Table, DateTime, LargeBinary
+from sqlalchemy import Column, Integer, String, Boolean, Numeric, ForeignKey, Table, DateTime, LargeBinary
 from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
@@ -27,19 +27,20 @@ class User(Base):
 
 
 class Product(Base):
+    """Generic product information shared across all product types."""
+
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    production_cost = Column(Numeric(10, 2), nullable=False)
-    selling_cost = Column(Numeric(10, 2), nullable=False)
-    height = Column(Numeric(10, 2), nullable=False)
-    length = Column(Numeric(10, 2), nullable=False)
-    depth = Column(Numeric(10, 2), nullable=False)
+    product_type = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
+    price = Column(Numeric(10, 2), nullable=False)
+    discount = Column(Numeric(10, 2), nullable=True)
+    discounted_price = Column(Numeric(10, 2), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    media = relationship("ProductMedia", back_populates="product")
+    model3d = relationship("Model3D", back_populates="product", uselist=False)
     categories = relationship("Category", secondary=product_categories, back_populates="products")
 
 class Category(Base):
@@ -50,16 +51,31 @@ class Category(Base):
 
     products = relationship("Product", secondary=product_categories, back_populates="categories")
 
-class ProductMedia(Base):
-    __tablename__ = "product_media"
+class Model3D(Base):
+    """Specific information for 3D model products."""
+
+    __tablename__ = "three_d_models"
+
+    id = Column(Integer, primary_key=True, index=True)
+    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, unique=True)
+    height = Column(Numeric(10, 2), nullable=False)
+    length = Column(Numeric(10, 2), nullable=False)
+    width = Column(Numeric(10, 2), nullable=False)
+
+    product = relationship("Product", back_populates="model3d")
+    media = relationship("Model3DMedia", back_populates="model3d")
+
+
+class Model3DMedia(Base):
+    __tablename__ = "model3d_media"
     id = Column(Integer, primary_key=True)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False)
+    model3d_id = Column(Integer, ForeignKey("three_d_models.id"), nullable=False)
     media_type = Column(String, nullable=False)
     filename = Column(String, nullable=False)
-    content_type = Column(String, nullable=False)  
-    data = Column(LargeBinary, nullable=False)     
+    content_type = Column(String, nullable=False)
+    data = Column(LargeBinary, nullable=False)
 
-    product = relationship("Product", back_populates="media")
+    model3d = relationship("Model3D", back_populates="media")
 
 class Order(Base):
     __tablename__ = "orders"

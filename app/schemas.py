@@ -16,37 +16,57 @@ class User(UserBase):
     class Config:
         orm_mode = True
 
-class ProductMediaBase(BaseModel):
-    product_id: int
+class Model3DMediaBase(BaseModel):
+    model3d_id: int
     media_type: str
     filename: str
     content_type: str
 
-class ProductMediaCreate(ProductMediaBase):
+class Model3DMediaCreate(Model3DMediaBase):
     pass
 
-class ProductMedia(ProductMediaBase):
+class Model3DMedia(Model3DMediaBase):
     id: int
+    class Config:
+        orm_mode = True
+
+
+class Model3DBase(BaseModel):
+    height: float
+    length: float
+    width: float
+
+
+class Model3DCreate(Model3DBase):
+    product_id: int
+
+
+class Model3D(Model3DBase):
+    id: int
+    product_id: int
+    media: List[Model3DMedia] = []
+
     class Config:
         orm_mode = True
 
 
 class ProductBase(BaseModel):
     name: str
-    production_cost: float
-    selling_cost: float
-    height: float
-    length: float
-    depth: float
+    product_type: str
     quantity: int
+    price: float
+    discount: Optional[float] = None
+    discounted_price: Optional[float] = None
+
 
 class ProductCreate(ProductBase):
     pass
 
+
 class Product(ProductBase):
     id: int
-    media: List[ProductMedia] = []
     created_at: datetime
+    model3d: Optional[Model3D] = None
 
     class Config:
         orm_mode = True
