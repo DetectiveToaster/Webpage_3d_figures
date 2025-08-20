@@ -120,38 +120,35 @@ def delete_product(product_id: int, db: Session = Depends(get_db_session), curre
         raise HTTPException(status_code=404, detail="Product not found")
     return db_product
 
-@app.post("/product_media/", response_model=schemas.ProductMedia)
-def create_product_media(
-    media: schemas.ProductMediaCreate,
+@app.post("/model3d_media/", response_model=schemas.Model3DMedia)
+def create_model3d_media(
+    media: schemas.Model3DMediaCreate,
     db: Session = Depends(get_db_session),
     current_user: models.User = Depends(admin_required),
 ):
-    # Optionally, check if product exists here.
-    return crud.create_product_media(db=db, media=media)
+    return crud.create_model3d_media(db=db, media=media)
 
-# Get all media for a product (public)
-@app.get("/product_media/product/{product_id}", response_model=List[schemas.ProductMedia])
-def get_media_for_product(
-    product_id: int,
+@app.get("/model3d_media/model/{model3d_id}", response_model=List[schemas.Model3DMedia])
+def get_media_for_model3d(
+    model3d_id: int,
     db: Session = Depends(get_db_session),
 ):
-    return crud.get_media_for_product(db=db, product_id=product_id)
+    return crud.get_media_for_model3d(db=db, model3d_id=model3d_id)
 
-# Delete a ProductMedia entry (admin only)
-@app.delete("/product_media/{media_id}", response_model=schemas.ProductMedia)
-def delete_product_media(
+@app.delete("/model3d_media/{media_id}", response_model=schemas.Model3DMedia)
+def delete_model3d_media(
     media_id: int,
     db: Session = Depends(get_db_session),
     current_user: models.User = Depends(admin_required),
 ):
-    db_media = crud.delete_product_media(db=db, media_id=media_id)
+    db_media = crud.delete_model3d_media(db=db, media_id=media_id)
     if db_media is None:
         raise HTTPException(status_code=404, detail="Media not found")
     return db_media
 
-@app.post("/product_media/upload/", response_model=schemas.ProductMedia)
-def upload_product_media(
-    product_id: int = Form(...),
+@app.post("/model3d_media/upload/", response_model=schemas.Model3DMedia)
+def upload_model3d_media(
+    model3d_id: int = Form(...),
     media_type: str = Form(...),  # "image" or "model"
     file: UploadFile = File(...),
     db: Session = Depends(get_db_session),
@@ -160,12 +157,12 @@ def upload_product_media(
     file_bytes = file.file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
-    db_media = models.ProductMedia(
-        product_id=product_id,
+    db_media = models.Model3DMedia(
+        model3d_id=model3d_id,
         media_type=media_type,
         filename=file.filename,
         content_type=file.content_type or "application/octet-stream",
-        data=file_bytes
+        data=file_bytes,
     )
     db.add(db_media)
     db.commit()
@@ -174,7 +171,7 @@ def upload_product_media(
 
 @app.get("/media/{media_id}")
 def get_media_file(media_id: int, db: Session = Depends(get_db_session)):
-    media = db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
+    media = db.query(models.Model3DMedia).filter(models.Model3DMedia.id == media_id).first()
     if not media:
         raise HTTPException(status_code=404, detail="Media not found")
     return Response(
