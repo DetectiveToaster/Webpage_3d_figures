@@ -1,4 +1,7 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
+from decimal import Decimal, ROUND_HALF_UP
+from typing import Optional
+from datetime import datetime
 from . import models, schemas
 from .security import hash_password
 
@@ -30,35 +33,87 @@ def create_guest_order(db: Session, order: schemas.GuestOrderBase):
     db.commit()
     db.refresh(db_order)
     
-    # Add products to the order
+    # Add products to the order and update sold counters
     for product in order.products:
         db_order_product = models.OrderProduct(order_id=db_order.id, product_id=product.product_id, quantity=product.quantity)
         db.add(db_order_product)
+        # Update sold_count
+        db_product = db.query(models.Product).filter(models.Product.id == product.product_id).first()
+        if db_product:
+            db_product.sold_count = (db_product.sold_count or 0) + product.quantity
     db.commit()
     
     return db_order
 
-"""Product and 3D model CRUD helpers."""
+"""Product and media CRUD helpers."""
 
 # Product CRUD
+def _compute_discounted_price(price: Decimal, discount_amount: Optional[Decimal]) -> Optional[Decimal]:
+    if discount_amount is None:
+        return None
+    discounted = price - discount_amount
+    if discounted < Decimal("0"):
+        discounted = Decimal("0")
+    return discounted.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
 def create_product(db: Session, product: schemas.ProductBase):
-    db_product = models.Product(**product.dict())
+    # Creates a simple base product (no subtype specifics)
+    data = product.dict(by_alias=False)
+    # Ensure discounted_price is computed if discount provided but discounted_price missing
+    if data.get("discount") is not None and data.get("discounted_price") is None:
+        price = Decimal(str(data["price"]))
+        discount = Decimal(str(data["discount"]))
+        data["discounted_price"] = _compute_discounted_price(price, discount)
+    db_product = models.Product(**data)
     db.add(db_product)
     db.commit()
     db.refresh(db_product)
     return db_product
 
 def get_product(db: Session, product_id: int):
-    return db.query(models.Product).filter(models.Product.id == product_id).first()
+    return (
+        db.query(models.Product)
+        .options(
+            selectinload(models.Product.media),
+            selectinload(models.Product.categories),
+        )
+        .filter(models.Product.id == product_id)
+        .first()
+    )
 
 def get_products(db: Session, skip: int = 0, limit: int = 10):
-    return db.query(models.Product).offset(skip).limit(limit).all()
+    return (
+        db.query(models.Product)
+        .options(
+            selectinload(models.Product.categories),
+        )
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+
+
+def get_visible_products(db: Session, skip: int = 0, limit: int = 10):
+    return (
+        db.query(models.Product)
+        .options(
+            selectinload(models.Product.categories),
+        )
+        .filter(models.Product.is_visible == True)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 def update_product(db: Session, product_id: int, product: schemas.ProductBase):
     db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
     if db_product:
-        for key, value in product.dict().items():
+        for key, value in product.dict(by_alias=False).items():
             setattr(db_product, key, value)
+        # recompute discounted_price if necessary
+        if db_product.discount is not None and db_product.discounted_price is None:
+            db_product.discounted_price = _compute_discounted_price(Decimal(str(db_product.price)), Decimal(str(db_product.discount)))
         db.commit()
         db.refresh(db_product)
     return db_product
@@ -70,33 +125,79 @@ def delete_product(db: Session, product_id: int):
         db.commit()
     return db_product
 
-# Create
-def create_model3d(db: Session, model: schemas.Model3DCreate):
-    db_model = models.Model3D(**model.dict())
-    db.add(db_model)
+def create_product_3d(db: Session, product: schemas.Product3DCreate):
+    # Instantiate the subclass directly; SQLAlchemy inserts parent + child
+    db_obj = models.ThreeDModel(
+        name=product.name,
+        type=product.type,
+        quantity=product.quantity,
+        price=product.price,
+        discount=product.discount,
+        discounted_price=product.discounted_price if product.discounted_price is not None and product.discount is not None else (
+            _compute_discounted_price(Decimal(str(product.price)), Decimal(str(product.discount))) if product.discount is not None else None
+        ),
+        height=product.height,
+        length=product.length,
+        width=product.width,
+    )
+    db.add(db_obj)
     db.commit()
-    db.refresh(db_model)
-    return db_model
+    db.refresh(db_obj)
+    return db_obj
 
+def create_card(db: Session, product: schemas.CardCreate):
+    db_obj = models.Card(
+        name=product.name,
+        type=product.type,
+        quantity=product.quantity,
+        price=product.price,
+        discount=product.discount,
+        discounted_price=product.discounted_price if product.discounted_price is not None and product.discount is not None else (
+            _compute_discounted_price(Decimal(str(product.price)), Decimal(str(product.discount))) if product.discount is not None else None
+        ),
+        series=product.series,
+        rarity=product.rarity,
+        condition=product.condition,
+    )
+    db.add(db_obj)
+    db.commit()
+    db.refresh(db_obj)
+    return db_obj
 
-def create_model3d_media(db: Session, media: schemas.Model3DMediaCreate):
-    db_media = models.Model3DMedia(**media.dict())
+def create_manual(db: Session, product: schemas.ManualCreate):
+    db_obj = models.Manual(
+        name=product.name,
+        type=product.type,
+        quantity=product.quantity,
+        price=product.price,
+        discount=product.discount,
+        discounted_price=product.discounted_price if product.discounted_price is not None and product.discount is not None else (
+            _compute_discounted_price(Decimal(str(product.price)), Decimal(str(product.discount))) if product.discount is not None else None
+        ),
+        page_count=product.page_count,
+        language=product.language,
+        format=product.format,
+    )
+    db.add(db_obj)
+    db.commit()
+    db.refresh(db_obj)
+    return db_obj
+
+def create_product_media(db: Session, media: schemas.ProductMediaCreate):
+    db_media = models.ProductMedia(**media.dict())
     db.add(db_media)
     db.commit()
     db.refresh(db_media)
     return db_media
 
+def get_media_for_product(db: Session, product_id: int):
+    return db.query(models.ProductMedia).filter(models.ProductMedia.product_id == product_id).all()
 
-def get_media_for_model3d(db: Session, model3d_id: int):
-    return db.query(models.Model3DMedia).filter(models.Model3DMedia.model3d_id == model3d_id).all()
+def get_product_media_by_id(db: Session, media_id: int):
+    return db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
 
-
-def get_model3d_media_by_id(db: Session, media_id: int):
-    return db.query(models.Model3DMedia).filter(models.Model3DMedia.id == media_id).first()
-
-
-def delete_model3d_media(db: Session, media_id: int):
-    db_media = db.query(models.Model3DMedia).filter(models.Model3DMedia.id == media_id).first()
+def delete_product_media(db: Session, media_id: int):
+    db_media = db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
     if db_media is None:
         return None
     db.delete(db_media)
@@ -112,7 +213,13 @@ def create_category(db: Session, category: schemas.CategoryBase):
     return db_category
 
 def get_categories(db: Session, skip: int = 0, limit: int = 10):
-    return db.query(models.Category).offset(skip).limit(limit).all()
+    return (
+        db.query(models.Category)
+        .options(selectinload(models.Category.products))
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
 
 # Order CRUD
 def create_order(db: Session, order: schemas.OrderBase):
@@ -172,3 +279,111 @@ def delete_cart_item(db: Session, cart_id: int):
         db.delete(cart_item)
         db.commit()
     return cart_item
+
+
+# --- View tracking and highlighting ---
+
+def increment_product_view(db: Session, product_id: int):
+    db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not db_product:
+        return None
+    db_product.view_count = (db_product.view_count or 0) + 1
+    db_product.last_viewed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(db_product)
+    return db_product
+
+
+def get_highlighted_products(db: Session, limit: int = 10):
+    # Fetch visible, in-stock products
+    candidates = (
+        db.query(models.Product)
+        .options(selectinload(models.Product.categories))
+        .filter(models.Product.is_visible == True)
+        .filter(models.Product.quantity > 0)
+        .all()
+    )
+
+    def score(p: models.Product) -> float:
+        import math
+        views = int(p.view_count or 0)
+        sold = int(p.sold_count or 0)
+        price = Decimal(str(p.price)) if p.price is not None else Decimal("0")
+        discount_amt = Decimal(str(p.discount)) if p.discount is not None else Decimal("0")
+        discount_ratio = float((discount_amt / price).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)) if price > 0 else 0.0
+        discount_ratio = max(0.0, min(discount_ratio, 0.8))
+        # Log-scaled signals
+        v = math.log1p(views)
+        s = math.log1p(sold)
+        # Interest gap: high views but low sales
+        gap = v * (1.0 - min(s / v if v > 0 else 0.0, 1.0))
+        # Recency boost based on age
+        days = 0.0
+        if p.created_at:
+            age = (datetime.utcnow() - p.created_at).days
+            days = float(age)
+        recency = math.exp(-(days / 45.0))
+        # Weighted sum
+        return 0.6 * s + 0.4 * v + 0.35 * gap + 0.3 * discount_ratio + 0.4 * recency
+
+    ranked = sorted(candidates, key=score, reverse=True)
+    return ranked[: max(0, int(limit))]
+
+
+# --- Pricing and visibility management ---
+
+def set_product_visibility(db: Session, product_id: int, is_visible: bool):
+    db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not db_product:
+        return None
+    db_product.is_visible = bool(is_visible)
+    db.commit()
+    db.refresh(db_product)
+    return db_product
+
+
+def update_product_price(db: Session, product_id: int, price: float):
+    if price < 0:
+        raise ValueError("Price cannot be negative")
+    db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not db_product:
+        return None
+    db_product.price = Decimal(str(price))
+    # Recompute discounted_price if discount exists
+    if db_product.discount is not None:
+        db_product.discounted_price = _compute_discounted_price(Decimal(str(db_product.price)), Decimal(str(db_product.discount)))
+    db.commit()
+    db.refresh(db_product)
+    return db_product
+
+
+def apply_product_discount(db: Session, product_id: int, mode: str, value: float):
+    """Apply discount either as percentage (0-100) or absolute amount.
+
+    Stores the absolute discount in `discount` and updates `discounted_price`.
+    """
+    mode_l = (mode or "").lower()
+    if mode_l not in ("percent", "amount"):
+        raise ValueError("mode must be 'percent' or 'amount'")
+    if value < 0:
+        raise ValueError("Discount value cannot be negative")
+
+    db_product = db.query(models.Product).filter(models.Product.id == product_id).first()
+    if not db_product:
+        return None
+
+    price = Decimal(str(db_product.price))
+    if mode_l == "percent":
+        if value > 100:
+            raise ValueError("Percentage cannot exceed 100")
+        discount_amount = (price * Decimal(str(value)) / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    else:
+        discount_amount = Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if discount_amount > price:
+            discount_amount = price
+
+    db_product.discount = discount_amount
+    db_product.discounted_price = _compute_discounted_price(price, discount_amount)
+    db.commit()
+    db.refresh(db_product)
+    return db_product

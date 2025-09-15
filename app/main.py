@@ -82,24 +82,40 @@ def login_for_access_token(db: Session = Depends(get_db_session), form_data: OAu
     return {"access_token": access_token, "token_type": "bearer"}
 
 # Secure endpoint to get current logged-in user
-@app.get("/users/me/", response_model=schemas.User)
-def read_users_me(current_user: models.User = Depends(get_current_active_user)):
+@app.get("/users/me/", response_model=schemas.UserProfile)
+@app.get("/users/me", response_model=schemas.UserProfile)
+def read_users_me(response: Response, current_user: models.User = Depends(get_current_active_user)):
+    # Prevent caching of sensitive user info
+    response.headers["Cache-Control"] = "no-store"
     return current_user
 
-# Secure endpoint to create a new product
+# Secure endpoint to create a new product (base type)
 @app.post("/products/", response_model=schemas.Product)
 def create_product(product: schemas.ProductBase, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
     return crud.create_product(db=db, product=product)
 
-# Public endpoint to get a list of products
+"""
+Public endpoints show only visible products by default. Admin endpoints allow
+management of visibility and pricing/discounts and listing all.
+"""
+
+# Public endpoint to get a list of visible products
 @app.get("/products/", response_model=List[schemas.Product])
 def read_products(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_session)):
-    products = crud.get_products(db, skip=skip, limit=limit)
+    products = crud.get_visible_products(db, skip=skip, limit=limit)
     return products
 
 @app.get("/products/{product_id}", response_model=schemas.Product)
 def get_product(product_id: int, db: Session = Depends(get_db_session)):
     db_product = crud.get_product(db, product_id=product_id)
+    if db_product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return db_product
+
+# Public: register a product view (call from product page render)
+@app.post("/products/{product_id}/view", response_model=schemas.Product)
+def register_product_view(product_id: int, db: Session = Depends(get_db_session)):
+    db_product = crud.increment_product_view(db, product_id)
     if db_product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     return db_product
@@ -120,36 +136,88 @@ def delete_product(product_id: int, db: Session = Depends(get_db_session), curre
         raise HTTPException(status_code=404, detail="Product not found")
     return db_product
 
-@app.post("/model3d_media/", response_model=schemas.Model3DMedia)
-def create_model3d_media(
-    media: schemas.Model3DMediaCreate,
+# Admin-only: list all products (including hidden)
+@app.get("/products/all", response_model=List[schemas.Product])
+def read_all_products(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    return crud.get_products(db, skip=skip, limit=limit)
+
+# Admin-only: set product visibility
+@app.patch("/products/{product_id}/visibility", response_model=schemas.Product)
+def set_product_visibility(product_id: int, payload: schemas.ProductVisibilityUpdate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    db_product = crud.set_product_visibility(db, product_id, payload.is_visible)
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return db_product
+
+# Admin-only: update product price
+@app.patch("/products/{product_id}/price", response_model=schemas.Product)
+def update_product_price(product_id: int, payload: schemas.ProductPriceUpdate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    try:
+        db_product = crud.update_product_price(db, product_id, payload.price)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return db_product
+
+# Admin-only: apply product discount (percent or amount)
+@app.patch("/products/{product_id}/discount", response_model=schemas.Product)
+def apply_product_discount(product_id: int, payload: schemas.ProductDiscountUpdate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    try:
+        db_product = crud.apply_product_discount(db, product_id, payload.mode, payload.value)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return db_product
+
+# Public: highlighted products for landing page
+@app.get("/products/highlighted", response_model=List[schemas.Product])
+def highlighted_products(limit: int = 12, db: Session = Depends(get_db_session)):
+    return crud.get_highlighted_products(db, limit=limit)
+
+@app.post("/products/3d", response_model=schemas.Product)
+def create_product_3d(product: schemas.Product3DCreate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    return crud.create_product_3d(db=db, product=product)
+
+@app.post("/products/cards", response_model=schemas.Product)
+def create_card(product: schemas.CardCreate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    return crud.create_card(db=db, product=product)
+
+@app.post("/products/manuals", response_model=schemas.Product)
+def create_manual(product: schemas.ManualCreate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    return crud.create_manual(db=db, product=product)
+
+@app.post("/product_media/", response_model=schemas.ProductMedia)
+def create_product_media(
+    media: schemas.ProductMediaCreate,
     db: Session = Depends(get_db_session),
     current_user: models.User = Depends(admin_required),
 ):
-    return crud.create_model3d_media(db=db, media=media)
+    return crud.create_product_media(db=db, media=media)
 
-@app.get("/model3d_media/model/{model3d_id}", response_model=List[schemas.Model3DMedia])
-def get_media_for_model3d(
-    model3d_id: int,
+@app.get("/product_media/product/{product_id}", response_model=List[schemas.ProductMedia])
+def get_media_for_product(
+    product_id: int,
     db: Session = Depends(get_db_session),
 ):
-    return crud.get_media_for_model3d(db=db, model3d_id=model3d_id)
+    return crud.get_media_for_product(db=db, product_id=product_id)
 
-@app.delete("/model3d_media/{media_id}", response_model=schemas.Model3DMedia)
-def delete_model3d_media(
+@app.delete("/product_media/{media_id}", response_model=schemas.ProductMedia)
+def delete_product_media(
     media_id: int,
     db: Session = Depends(get_db_session),
     current_user: models.User = Depends(admin_required),
 ):
-    db_media = crud.delete_model3d_media(db=db, media_id=media_id)
+    db_media = crud.delete_product_media(db=db, media_id=media_id)
     if db_media is None:
         raise HTTPException(status_code=404, detail="Media not found")
     return db_media
 
-@app.post("/model3d_media/upload/", response_model=schemas.Model3DMedia)
-def upload_model3d_media(
-    model3d_id: int = Form(...),
-    media_type: str = Form(...),  # "image" or "model"
+@app.post("/product_media/upload/", response_model=schemas.ProductMedia)
+def upload_product_media(
+    product_id: int = Form(...),
+    media_type: str = Form(...),  # "image" | "model" | "pdf"
     file: UploadFile = File(...),
     db: Session = Depends(get_db_session),
     current_user: models.User = Depends(admin_required),  # Admin only
@@ -157,9 +225,9 @@ def upload_model3d_media(
     file_bytes = file.file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
-    db_media = models.Model3DMedia(
-        model3d_id=model3d_id,
-        media_type=media_type,
+    db_media = models.ProductMedia(
+        product_id=product_id,
+        kind=media_type,
         filename=file.filename,
         content_type=file.content_type or "application/octet-stream",
         data=file_bytes,

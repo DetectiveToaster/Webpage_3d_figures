@@ -7,8 +7,8 @@ from datetime import datetime
 product_categories = Table(
     'product_categories',
     Base.metadata,
-    Column('product_id', Integer, ForeignKey('products.id'), primary_key=True),
-    Column('category_id', Integer, ForeignKey('categories.id'), primary_key=True)
+    Column('product_id', Integer, ForeignKey('products.id', ondelete="CASCADE"), primary_key=True),
+    Column('category_id', Integer, ForeignKey('categories.id', ondelete="CASCADE"), primary_key=True)
 )
 
 class User(Base):
@@ -23,65 +23,126 @@ class User(Base):
 
     # Add this relationship
     orders = relationship("Order", back_populates="user")
-    cart = relationship("Cart", back_populates="user")
+    cart = relationship("Cart", back_populates="user", cascade="all, delete-orphan", passive_deletes=True)
 
 
 class Product(Base):
-    """Generic product information shared across all product types."""
+    """Base product with polymorphic subtypes (3D model, card, manual)."""
 
     __tablename__ = "products"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Discriminator for SQLAlchemy polymorphism
+    type = Column(String(50), nullable=False, index=True)
+
     name = Column(String, nullable=False)
-    product_type = Column(String, nullable=False)
     quantity = Column(Integer, nullable=False)
     price = Column(Numeric(10, 2), nullable=False)
     discount = Column(Numeric(10, 2), nullable=True)
     discounted_price = Column(Numeric(10, 2), nullable=True)
+    is_visible = Column(Boolean, nullable=False, default=True)
+    view_count = Column(Integer, nullable=False, default=0)
+    sold_count = Column(Integer, nullable=False, default=0)
+    last_viewed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    model3d = relationship("Model3D", back_populates="product", uselist=False)
-    categories = relationship("Category", secondary=product_categories, back_populates="products")
+    @property
+    def product_type(self):
+        return self.type
+
+    @product_type.setter
+    def product_type(self, value):
+        self.type = value
+
+    # Relationships
+    categories = relationship(
+        "Category",
+        secondary=product_categories,
+        back_populates="products",
+        lazy="selectin",
+    )
+    media = relationship(
+        "ProductMedia",
+        back_populates="product",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="selectin",
+    )
+
+    __mapper_args__ = {
+        "polymorphic_on": type,
+        "polymorphic_identity": "base",
+    }
 
 class Category(Base):
     __tablename__ = "categories"
 
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, nullable=False)
+    name = Column(String, nullable=False, unique=True)
 
-    products = relationship("Product", secondary=product_categories, back_populates="categories")
+    products = relationship(
+        "Product",
+        secondary=product_categories,
+        back_populates="categories",
+        lazy="selectin",
+    )
 
-class Model3D(Base):
-    """Specific information for 3D model products."""
+class ThreeDModel(Product):
+    """Specific information for 3D model products (joined-table inheritance)."""
 
     __tablename__ = "three_d_models"
 
-    id = Column(Integer, primary_key=True, index=True)
-    product_id = Column(Integer, ForeignKey("products.id"), nullable=False, unique=True)
+    # In joined-table inheritance, the PK is also a FK to products.id
+    id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True, index=True)
     height = Column(Numeric(10, 2), nullable=False)
     length = Column(Numeric(10, 2), nullable=False)
     width = Column(Numeric(10, 2), nullable=False)
 
-    product = relationship("Product", back_populates="model3d")
-    media = relationship("Model3DMedia", back_populates="model3d")
+    __mapper_args__ = {
+        "polymorphic_identity": "3d",
+    }
 
+class Card(Product):
+    __tablename__ = "cards"
 
-class Model3DMedia(Base):
-    __tablename__ = "model3d_media"
+    id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True, index=True)
+    series = Column(String, nullable=True)
+    rarity = Column(String, nullable=True)
+    condition = Column(String, nullable=True)
+
+    __mapper_args__ = {
+        "polymorphic_identity": "card",
+    }
+
+class Manual(Product):
+    __tablename__ = "manuals"
+
+    id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), primary_key=True, index=True)
+    page_count = Column(Integer, nullable=True)
+    language = Column(String, nullable=True)
+    format = Column(String, nullable=True)  # e.g., "pdf", "epub"
+
+    __mapper_args__ = {
+        "polymorphic_identity": "manual",
+    }
+
+class ProductMedia(Base):
+    __tablename__ = "product_media"
     id = Column(Integer, primary_key=True)
-    model3d_id = Column(Integer, ForeignKey("three_d_models.id"), nullable=False)
-    media_type = Column(String, nullable=False)
+    product_id = Column(Integer, ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String, nullable=False)  # image | model | pdf | etc.
+    role = Column(String, nullable=True)   # thumbnail | gallery | source | etc.
     filename = Column(String, nullable=False)
     content_type = Column(String, nullable=False)
     data = Column(LargeBinary, nullable=False)
 
-    model3d = relationship("Model3D", back_populates="media")
+    product = relationship("Product", back_populates="media")
 
 class Order(Base):
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
     total_cost = Column(Numeric(10, 2), nullable=False)
     date = Column(DateTime, default=datetime.utcnow)
     status = Column(String, nullable=False)
@@ -92,12 +153,12 @@ class Order(Base):
     guest_address = Column(String, nullable=True)
 
     user = relationship("User", back_populates="orders")
-    products = relationship("OrderProduct", back_populates="order")
+    products = relationship("OrderProduct", back_populates="order", cascade="all, delete-orphan", passive_deletes=True)
 
 class OrderProduct(Base):
     __tablename__ = "order_products"
 
-    order_id = Column(Integer, ForeignKey('orders.id'), primary_key=True)
+    order_id = Column(Integer, ForeignKey('orders.id', ondelete="CASCADE"), primary_key=True)
     product_id = Column(Integer, ForeignKey('products.id'), primary_key=True)
     quantity = Column(Integer, nullable=False)
 
@@ -108,10 +169,10 @@ class Cart(Base):
     __tablename__ = "cart"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete="CASCADE"), nullable=False)
     product_id = Column(Integer, ForeignKey('products.id'), nullable=False)
     quantity = Column(Integer, nullable=False)
     added_at = Column(DateTime, default=datetime.utcnow)
 
-    user = relationship("User", back_populates="cart")
+    user = relationship("User", back_populates="cart", passive_deletes=True)
     product = relationship("Product")

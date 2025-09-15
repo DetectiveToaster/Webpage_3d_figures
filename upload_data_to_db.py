@@ -9,12 +9,13 @@ DATA_FOLDER = os.path.join(os.path.dirname(__file__), "data")
 ALLOWED_EXTENSIONS = [".jpg", ".jpeg", ".png", ".glb"]
 
 def list_models(db: Session):
-    models3d = db.query(models.Model3D).all()
+    models3d = db.query(models.ThreeDModel).all()
     print("\nAvailable 3D Models:")
     mapping = {}
     for m in models3d:
-        prod = db.query(models.Product).filter(models.Product.id == m.product_id).first()
-        name = prod.name if prod else f"Product {m.product_id}"
+        # In joined-table inheritance, ThreeDModel.id == Product.id
+        prod = db.query(models.Product).filter(models.Product.id == m.id).first()
+        name = prod.name if prod else f"Product {m.id}"
         print(f"{m.id}: {name}")
         mapping[str(m.id)] = name
     print("")
@@ -31,21 +32,21 @@ def guess_media_type(filename):
     else:
         return None, None
 
-def upload_media(model3d_id, media_type, content_type, filepath, db):
+def upload_media(product_id, media_type, content_type, filepath, db):
     filename = os.path.basename(filepath)
     with open(filepath, "rb") as f:
         file_bytes = f.read()
-    db_media = models.Model3DMedia(
-        model3d_id=model3d_id,
-        media_type=media_type,
+    db_media = models.ProductMedia(
+        product_id=product_id,
+        kind=media_type,
         filename=filename,
         content_type=content_type,
-        data=file_bytes
+        data=file_bytes,
     )
     db.add(db_media)
     db.commit()
     db.refresh(db_media)
-    print(f"  Uploaded {filename} as {media_type} to model ID {model3d_id}.")
+    print(f"  Uploaded {filename} as {media_type} to product ID {product_id}.")
 
 if __name__ == "__main__":
     db = SessionLocal()
@@ -75,7 +76,7 @@ if __name__ == "__main__":
 
         model_dict = list_models(db)
         while True:
-            model_id = input(f"Enter the 3D model ID to assign ALL files in '{folder}' to (or blank to skip): ").strip()
+            model_id = input(f"Enter the 3D product ID to assign ALL files in '{folder}' to (or blank to skip): ").strip()
             if not model_id:
                 print(f"Skipping folder '{folder}'.")
                 break
