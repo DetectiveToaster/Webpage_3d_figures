@@ -1,5 +1,5 @@
-from pydantic import BaseModel, Field
-from typing import List, Optional
+from pydantic import BaseModel, Field, validator
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 class UserBase(BaseModel):
@@ -179,6 +179,50 @@ class GuestOrderBase(BaseModel):
     status: str
     paypal_order_id: Optional[str] = None
     products: List[OrderProductBase]
+
+
+
+class ShippingAddress(BaseModel):
+    country_code: str = Field(..., min_length=2, max_length=2, description="ISO 3166-1 alpha-2 country code")
+    postal_code: str
+    city: str
+    state: Optional[str] = None
+    address_line1: str
+    address_line2: Optional[str] = None
+
+
+class ShippingPackage(BaseModel):
+    weight_kg: float = Field(..., gt=0)
+    length_cm: float = Field(..., gt=0)
+    width_cm: float = Field(..., gt=0)
+    height_cm: float = Field(..., gt=0)
+
+
+class ShippingQuoteRequest(BaseModel):
+    origin: ShippingAddress
+    destination: ShippingAddress
+    package: ShippingPackage
+    declared_value: Optional[float] = Field(None, ge=0)
+    currency: str = Field("EUR", min_length=3, max_length=3, description="ISO 4217 currency code")
+    carriers: Optional[List[str]] = Field(None, description="Specific carriers to query; defaults to all supported carriers")
+
+    @validator("currency")
+    def uppercase_currency(cls, value: str) -> str:
+        return value.upper()
+
+
+class ShippingQuote(BaseModel):
+    carrier: str
+    service: Optional[str] = None
+    cost: float
+    currency: str
+    estimated_delivery_days: Optional[int] = None
+    raw: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ShippingQuoteResponse(BaseModel):
+    quotes: List[ShippingQuote] = Field(default_factory=list)
+    errors: Dict[str, str] = Field(default_factory=dict)
 
 class Token(BaseModel):
     access_token: str

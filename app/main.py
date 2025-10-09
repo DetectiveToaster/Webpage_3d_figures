@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 from pydantic import BaseModel
-from . import crud, models, schemas, auth, paypal
+from . import crud, models, schemas, auth, paypal, shipping
 from .database import SessionLocal, engine
 from .auth import authenticate_user, create_access_token, get_current_active_user, admin_required
 import os
@@ -105,12 +105,12 @@ def read_products(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_s
     products = crud.get_visible_products(db, skip=skip, limit=limit)
     return products
 
-@app.get("/products/{product_id}", response_model=schemas.Product)
-def get_product(product_id: int, db: Session = Depends(get_db_session)):
-    db_product = crud.get_product(db, product_id=product_id)
-    if db_product is None:
-        raise HTTPException(status_code=404, detail="Product not found")
-    return db_product
+@app.post("/shipping/quote", response_model=schemas.ShippingQuoteResponse)
+def calculate_shipping_quote(payload: schemas.ShippingQuoteRequest):
+    quotes, errors = shipping.get_shipping_quotes(payload)
+    if not quotes and errors:
+        raise HTTPException(status_code=502, detail={"message": "No shipping rates available", "errors": errors})
+    return {"quotes": quotes, "errors": errors}
 
 # Public: register a product view (call from product page render)
 @app.post("/products/{product_id}/view", response_model=schemas.Product)
@@ -176,6 +176,14 @@ def apply_product_discount(product_id: int, payload: schemas.ProductDiscountUpda
 def highlighted_products(limit: int = 12, db: Session = Depends(get_db_session)):
     return crud.get_highlighted_products(db, limit=limit)
 
+# Public endpoint to get a single product by ID
+@app.get("/products/{product_id}", response_model=schemas.Product)
+def get_product(product_id: int, db: Session = Depends(get_db_session)):
+    db_product = crud.get_product(db, product_id=product_id)
+    if db_product is None:
+        raise HTTPException(status_code=404, detail="Product not found")
+    return db_product
+
 @app.post("/products/3d", response_model=schemas.Product)
 def create_product_3d(product: schemas.Product3DCreate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
     return crud.create_product_3d(db=db, product=product)
@@ -239,7 +247,7 @@ def upload_product_media(
 
 @app.get("/media/{media_id}")
 def get_media_file(media_id: int, db: Session = Depends(get_db_session)):
-    media = db.query(models.Model3DMedia).filter(models.Model3DMedia.id == media_id).first()
+    media = db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
     if not media:
         raise HTTPException(status_code=404, detail="Media not found")
     return Response(
