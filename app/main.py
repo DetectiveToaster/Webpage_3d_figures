@@ -12,6 +12,7 @@ from . import crud, models, schemas, auth, paypal, shipping
 from .database import SessionLocal, engine
 from .auth import authenticate_user, create_access_token, get_current_active_user, admin_required
 import os
+import warnings
 
 # Initialize the database
 models.Base.metadata.create_all(bind=engine)
@@ -37,8 +38,13 @@ def get_db_session():
 
 def create_admin_user():
     db = SessionLocal()
-    admin_email = "admin@example.com"
-    admin_password = "your_secure_password"
+    admin_email = os.getenv("ADMIN_EMAIL")
+    admin_password = os.getenv("ADMIN_PASSWORD")
+
+    if not admin_email or not admin_password:
+        warnings.warn("Admin seed skipped: set ADMIN_EMAIL and ADMIN_PASSWORD to auto-create an admin user.")
+        db.close()
+        return
 
     existing_user = db.query(models.User).filter(models.User.email == admin_email).first()
     if not existing_user:

@@ -1,6 +1,8 @@
 # app/auth.py
 
 from datetime import datetime, timedelta
+import os
+import warnings
 from typing import Optional
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
@@ -11,7 +13,11 @@ from .database import get_db
 from .security import hash_password, verify_password
 
 # Secret key to encode the JWT tokens
-SECRET_KEY = "your_secret_key_here"  # Change this to a more secure key
+SECRET_KEY = os.getenv("SECRET_KEY")
+if not SECRET_KEY:
+    SECRET_KEY = "dev-secret-key"
+    warnings.warn("SECRET_KEY is not set; using insecure dev-secret-key", RuntimeWarning)
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 

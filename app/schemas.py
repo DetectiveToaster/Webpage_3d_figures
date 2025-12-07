@@ -138,6 +138,9 @@ class Category(CategoryBase):
 class OrderProductBase(BaseModel):
     product_id: int
     quantity: int
+    unit_price: Optional[float] = None
+    currency: Optional[str] = None
+    line_total: Optional[float] = None
 
 class OrderProduct(OrderProductBase):
     order_id: int
@@ -149,8 +152,16 @@ class OrderProduct(OrderProductBase):
 class OrderBase(BaseModel):
     user_id: Optional[int]
     total_cost: float
+    currency: str = "USD"
     status: str
     paypal_order_id: Optional[str] = None
+    order_number: Optional[str] = None
+    shipping_address_line1: Optional[str] = None
+    shipping_address_line2: Optional[str] = None
+    shipping_city: Optional[str] = None
+    shipping_state: Optional[str] = None
+    shipping_postal_code: Optional[str] = None
+    shipping_country_code: Optional[str] = None
 
 class Order(OrderBase):
     id: int
@@ -176,8 +187,16 @@ class GuestOrderBase(BaseModel):
     guest_email: str
     guest_address: str
     total_cost: float
+    currency: str = "USD"
     status: str
     paypal_order_id: Optional[str] = None
+    order_number: Optional[str] = None
+    shipping_address_line1: Optional[str] = None
+    shipping_address_line2: Optional[str] = None
+    shipping_city: Optional[str] = None
+    shipping_state: Optional[str] = None
+    shipping_postal_code: Optional[str] = None
+    shipping_country_code: Optional[str] = None
     products: List[OrderProductBase]
 
 

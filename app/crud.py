@@ -2,6 +2,7 @@ from sqlalchemy.orm import Session, selectinload
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
+import uuid
 from . import models, schemas
 from .security import hash_password
 
@@ -22,27 +23,55 @@ def get_users(db: Session, skip: int = 0, limit: int = 10):
 
 # app/crud.py
 
+def _order_number(seed: Optional[str] = None) -> str:
+    return seed or uuid.uuid4().hex[:12].upper()
+
+
 def create_guest_order(db: Session, order: schemas.GuestOrderBase):
     db_order = models.Order(
         guest_email=order.guest_email,
         guest_address=order.guest_address,
         total_cost=order.total_cost,
-        status=order.status
+        currency=order.currency,
+        status=order.status,
+        order_number=_order_number(order.order_number),
+        shipping_address_line1=order.shipping_address_line1,
+        shipping_address_line2=order.shipping_address_line2,
+        shipping_city=order.shipping_city,
+        shipping_state=order.shipping_state,
+        shipping_postal_code=order.shipping_postal_code,
+        shipping_country_code=order.shipping_country_code,
     )
     db.add(db_order)
     db.commit()
     db.refresh(db_order)
-    
+
     # Add products to the order and update sold counters
+    line_totals: Decimal = Decimal("0")
     for product in order.products:
-        db_order_product = models.OrderProduct(order_id=db_order.id, product_id=product.product_id, quantity=product.quantity)
+        db_product = db.query(models.Product).filter(models.Product.id == product.product_id).first()
+        unit_price = Decimal(str(product.unit_price)) if product.unit_price is not None else (
+            Decimal(str(db_product.price)) if db_product and db_product.price is not None else Decimal("0")
+        )
+        line_total = (unit_price * Decimal(str(product.quantity))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        line_totals += line_total
+        db_order_product = models.OrderProduct(
+            order_id=db_order.id,
+            product_id=product.product_id,
+            quantity=product.quantity,
+            unit_price=unit_price,
+            currency=product.currency or order.currency,
+            line_total=line_total,
+        )
         db.add(db_order_product)
         # Update sold_count
-        db_product = db.query(models.Product).filter(models.Product.id == product.product_id).first()
         if db_product:
             db_product.sold_count = (db_product.sold_count or 0) + product.quantity
+    # If caller didn't provide total_cost, fall back to sum of lines
+    if order.total_cost is None:
+        db_order.total_cost = line_totals
     db.commit()
-    
+
     return db_order
 
 """Product and media CRUD helpers."""
@@ -223,7 +252,9 @@ def get_categories(db: Session, skip: int = 0, limit: int = 10):
 
 # Order CRUD
 def create_order(db: Session, order: schemas.OrderBase):
-    db_order = models.Order(**order.dict())
+    data = order.dict()
+    data["order_number"] = order.order_number or _order_number(order.order_number)
+    db_order = models.Order(**data)
     db.add(db_order)
     db.commit()
     db.refresh(db_order)

@@ -3,7 +3,7 @@ sqlalchemy
 psycopg2-binary
 uvicorn
 passlib
-bcrypt
+bcrypt<5
 python-jose
 python-multipart
 requests

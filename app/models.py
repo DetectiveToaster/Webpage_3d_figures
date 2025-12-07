@@ -1,4 +1,16 @@
-from sqlalchemy import Column, Integer, String, Boolean, Numeric, ForeignKey, Table, DateTime, LargeBinary
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Boolean,
+    Numeric,
+    ForeignKey,
+    Table,
+    DateTime,
+    LargeBinary,
+    UniqueConstraint,
+    Index,
+)
 from sqlalchemy.orm import relationship
 from .database import Base
 from datetime import datetime
@@ -142,8 +154,10 @@ class Order(Base):
     __tablename__ = "orders"
 
     id = Column(Integer, primary_key=True, index=True)
+    order_number = Column(String, unique=True, nullable=True, index=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
     total_cost = Column(Numeric(10, 2), nullable=False)
+    currency = Column(String(3), nullable=False, default="USD")
     date = Column(DateTime, default=datetime.utcnow)
     status = Column(String, nullable=False)
     paypal_order_id = Column(String, nullable=True)
@@ -151,6 +165,12 @@ class Order(Base):
     # Fields for guest users
     guest_email = Column(String, nullable=True)
     guest_address = Column(String, nullable=True)
+    shipping_address_line1 = Column(String, nullable=True)
+    shipping_address_line2 = Column(String, nullable=True)
+    shipping_city = Column(String, nullable=True)
+    shipping_state = Column(String, nullable=True)
+    shipping_postal_code = Column(String, nullable=True)
+    shipping_country_code = Column(String(2), nullable=True)
 
     user = relationship("User", back_populates="orders")
     products = relationship("OrderProduct", back_populates="order", cascade="all, delete-orphan", passive_deletes=True)
@@ -161,6 +181,9 @@ class OrderProduct(Base):
     order_id = Column(Integer, ForeignKey('orders.id', ondelete="CASCADE"), primary_key=True)
     product_id = Column(Integer, ForeignKey('products.id'), primary_key=True)
     quantity = Column(Integer, nullable=False)
+    unit_price = Column(Numeric(10, 2), nullable=True)
+    currency = Column(String(3), nullable=True)
+    line_total = Column(Numeric(10, 2), nullable=True)
 
     order = relationship("Order", back_populates="products")
     product = relationship("Product")
@@ -176,3 +199,15 @@ class Cart(Base):
 
     user = relationship("User", back_populates="cart", passive_deletes=True)
     product = relationship("Product")
+
+    __table_args__ = (
+        UniqueConstraint('user_id', 'product_id', name='uq_cart_user_product'),
+        Index('ix_cart_user', 'user_id'),
+    )
+
+
+# Helpful indexes
+Index('ix_products_visible', Product.is_visible)
+Index('ix_products_created_at', Product.created_at)
+Index('ix_orders_user_date', Order.user_id, Order.date)
+Index('ix_order_products_order', OrderProduct.order_id)
