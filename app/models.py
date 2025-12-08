@@ -10,6 +10,7 @@ from sqlalchemy import (
     LargeBinary,
     UniqueConstraint,
     Index,
+    Text,
 )
 from sqlalchemy.orm import relationship
 from .database import Base
@@ -53,6 +54,7 @@ class Product(Base):
     discount = Column(Numeric(10, 2), nullable=True)
     discounted_price = Column(Numeric(10, 2), nullable=True)
     is_visible = Column(Boolean, nullable=False, default=True)
+    status = Column(String(20), nullable=False, default="published")  # draft | published
     view_count = Column(Integer, nullable=False, default=0)
     sold_count = Column(Integer, nullable=False, default=0)
     last_viewed_at = Column(DateTime, nullable=True)
@@ -147,6 +149,8 @@ class ProductMedia(Base):
     filename = Column(String, nullable=False)
     content_type = Column(String, nullable=False)
     data = Column(LargeBinary, nullable=False)
+    path = Column(Text, nullable=True)  # optional filesystem path if/when used
+    sort_order = Column(Integer, nullable=False, default=0)
 
     product = relationship("Product", back_populates="media")
 
@@ -211,3 +215,29 @@ Index('ix_products_visible', Product.is_visible)
 Index('ix_products_created_at', Product.created_at)
 Index('ix_orders_user_date', Order.user_id, Order.date)
 Index('ix_order_products_order', OrderProduct.order_id)
+
+
+# Upload session staging (for batch uploads)
+class UploadSession(Base):
+    __tablename__ = "upload_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    files = relationship("UploadFile", back_populates="session", cascade="all, delete-orphan")
+
+
+class UploadFile(Base):
+    __tablename__ = "upload_files"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("upload_sessions.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=False)
+    role = Column(String, nullable=True)
+    sort_order = Column(Integer, nullable=False, default=0)
+    data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    session = relationship("UploadSession", back_populates="files")
+
+Index('ix_upload_files_session', UploadFile.session_id)

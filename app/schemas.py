@@ -44,6 +44,8 @@ class ProductMediaBase(BaseModel):
     filename: str
     content_type: str
     role: Optional[str] = None
+    sort_order: int = 0
+    path: Optional[str] = None
 
 
 class ProductMediaCreate(ProductMediaBase):
@@ -69,6 +71,7 @@ class ProductBase(BaseModel):
 class ProductCreate(ProductBase):
     class Config:
         allow_population_by_field_name = True
+        extra = "allow"
 
 
 class Product(ProductBase):
@@ -77,6 +80,7 @@ class Product(ProductBase):
     view_count: int
     sold_count: int
     last_viewed_at: Optional[datetime] = None
+    status: str = "published"
     # Optional subtype-specific fields
     height: Optional[float] = None
     length: Optional[float] = None
@@ -95,6 +99,7 @@ class Product(ProductBase):
     class Config:
         orm_mode = True
         allow_population_by_field_name = True
+        extra = "allow"
 
 
 # Admin field updates
@@ -198,6 +203,43 @@ class GuestOrderBase(BaseModel):
     shipping_postal_code: Optional[str] = None
     shipping_country_code: Optional[str] = None
     products: List[OrderProductBase]
+
+
+# Upload session schemas
+class UploadSession(BaseModel):
+    id: int
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class UploadFile(BaseModel):
+    id: int
+    filename: str
+    content_type: str
+    role: Optional[str] = None
+    sort_order: int = 0
+    created_at: datetime
+
+    class Config:
+        orm_mode = True
+
+
+class UploadSessionCreateResponse(BaseModel):
+    upload_id: int
+
+
+class UploadCommitItem(BaseModel):
+    file_id: int
+    product_id: int
+    role: Optional[str] = None
+    sort_order: int = 0
+    kind: str
+
+
+class UploadCommitRequest(BaseModel):
+    items: List[UploadCommitItem]
 
 
 

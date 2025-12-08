@@ -41,10 +41,18 @@ def create_admin_user():
     admin_email = os.getenv("ADMIN_EMAIL")
     admin_password = os.getenv("ADMIN_PASSWORD")
 
+    # Remove hardcoded testing values; rely on env
+    # admin_email = "mail"
+    # admin_password = "pass"
+
     if not admin_email or not admin_password:
         warnings.warn("Admin seed skipped: set ADMIN_EMAIL and ADMIN_PASSWORD to auto-create an admin user.")
         db.close()
         return
+
+    if len(admin_password) > 72:
+        warnings.warn("ADMIN_PASSWORD is longer than 72 characters; truncating for bcrypt compatibility.")
+        admin_password = admin_password[:72]
 
     existing_user = db.query(models.User).filter(models.User.email == admin_email).first()
     if not existing_user:
@@ -250,6 +258,66 @@ def upload_product_media(
     db.commit()
     db.refresh(db_media)
     return db_media
+
+# --- Batch upload pipeline ---
+
+@app.post("/admin/uploads", response_model=schemas.UploadSessionCreateResponse)
+def create_upload_session_route(db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    session = crud.create_upload_session(db)
+    return {"upload_id": session.id}
+
+
+@app.get("/admin/uploads/{upload_id}/files", response_model=List[schemas.UploadFile])
+def list_upload_files(upload_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    files = crud.list_session_files(db, upload_id)
+    if files is None:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    return files
+
+
+@app.post("/admin/uploads/{upload_id}/files", response_model=schemas.UploadFile)
+def add_file_to_upload(
+    upload_id: int,
+    role: str = Form(None),
+    sort_order: int = Form(0),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    data = file.file.read()
+    rec = crud.add_file_to_session(
+        db,
+        session_id=upload_id,
+        filename=file.filename,
+        content_type=file.content_type or "application/octet-stream",
+        role=role,
+        sort_order=sort_order or 0,
+        data=data,
+    )
+    if not rec:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    return rec
+
+
+@app.post("/admin/uploads/{upload_id}/commit", response_model=List[schemas.ProductMedia])
+def commit_upload(
+    upload_id: int,
+    payload: schemas.UploadCommitRequest,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    created = crud.commit_upload_session(db, upload_id, payload.items)
+    if created is None:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    return created
+
+
+@app.delete("/admin/uploads/{upload_id}", status_code=204)
+def delete_upload(upload_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    ok = crud.delete_upload_session(db, upload_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Upload session not found")
+    return Response(status_code=204)
 
 @app.get("/media/{media_id}")
 def get_media_file(media_id: int, db: Session = Depends(get_db_session)):

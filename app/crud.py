@@ -3,6 +3,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from datetime import datetime
 import uuid
+from sqlalchemy import select
 from . import models, schemas
 from .security import hash_password
 
@@ -232,6 +233,75 @@ def delete_product_media(db: Session, media_id: int):
     db.delete(db_media)
     db.commit()
     return db_media
+
+# Upload sessions
+def create_upload_session(db: Session) -> models.UploadSession:
+    session = models.UploadSession()
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def add_file_to_session(db: Session, session_id: int, filename: str, content_type: str, role: Optional[str], sort_order: int, data: bytes):
+    upload = db.query(models.UploadSession).filter(models.UploadSession.id == session_id).first()
+    if not upload:
+        return None
+    file_rec = models.UploadFile(
+        session_id=session_id,
+        filename=filename,
+        content_type=content_type,
+        role=role,
+        sort_order=sort_order,
+        data=data,
+    )
+    db.add(file_rec)
+    db.commit()
+    db.refresh(file_rec)
+    return file_rec
+
+
+def list_session_files(db: Session, session_id: int):
+    return db.query(models.UploadFile).filter(models.UploadFile.session_id == session_id).order_by(models.UploadFile.sort_order, models.UploadFile.id).all()
+
+
+def delete_upload_session(db: Session, session_id: int):
+    session = db.query(models.UploadSession).filter(models.UploadSession.id == session_id).first()
+    if not session:
+        return False
+    db.delete(session)
+    db.commit()
+    return True
+
+
+def commit_upload_session(db: Session, session_id: int, items: list[schemas.UploadCommitItem]):
+    files_by_id = {
+        f.id: f for f in db.query(models.UploadFile).filter(models.UploadFile.session_id == session_id).all()
+    }
+    if not files_by_id:
+        return []
+    created_media = []
+    for item in items:
+        f = files_by_id.get(item.file_id)
+        if not f:
+            continue
+        media = models.ProductMedia(
+            product_id=item.product_id,
+            kind=item.kind,
+            filename=f.filename,
+            content_type=f.content_type,
+            role=item.role or f.role,
+            sort_order=item.sort_order if item.sort_order is not None else f.sort_order,
+            data=f.data,
+        )
+        db.add(media)
+        created_media.append(media)
+    # Remove session and files after commit
+    delete_upload_session(db, session_id)
+    db.commit()
+    for media in created_media:
+        db.refresh(media)
+    return created_media
 
 # Category CRUD
 def create_category(db: Session, category: schemas.CategoryBase):
