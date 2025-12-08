@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.db
+*.sqlite
+build
+dist
+pgdata
+alembic/__pycache__
+data
+.git
+.gitignore

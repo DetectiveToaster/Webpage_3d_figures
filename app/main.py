@@ -14,14 +14,18 @@ from .auth import authenticate_user, create_access_token, get_current_active_use
 import os
 import warnings
 
-# Initialize the database
-models.Base.metadata.create_all(bind=engine)
+# Initialize the database (guarded; prefer Alembic migrations in production)
+if os.getenv("RUN_CREATE_ALL") == "true":
+    models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # or ["*"] for all origins during dev
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],  # extend with your frontend origin(s) in prod
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
