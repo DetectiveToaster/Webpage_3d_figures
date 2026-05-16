@@ -1,4 +1,5 @@
 .venv
+venv
 __pycache__
 *.pyc
 *.pyo
@@ -10,5 +11,7 @@ dist
 pgdata
 alembic/__pycache__
 data
+backend.env
+.pytest_cache
 .git
 .gitignore

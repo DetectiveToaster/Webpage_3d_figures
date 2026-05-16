@@ -82,9 +82,9 @@ def _basic_auth_value(token: str, secret: str) -> str:
 
 def _common_payload(request: schemas.ShippingQuoteRequest) -> Dict[str, object]:
     return {
-        "origin": request.origin.dict(),
-        "destination": request.destination.dict(),
-        "package": request.package.dict(),
+        "origin": request.origin.model_dump(),
+        "destination": request.destination.model_dump(),
+        "package": request.package.model_dump(),
         "declaredValue": request.declared_value,
         "currency": request.currency,
     }

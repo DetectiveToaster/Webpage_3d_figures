@@ -5,13 +5,17 @@ PAYPAL_CLIENT_ID = os.getenv("PAYPAL_CLIENT_ID")
 PAYPAL_SECRET = os.getenv("PAYPAL_SECRET")
 PAYPAL_BASE = os.getenv("PAYPAL_BASE", "https://api-m.sandbox.paypal.com")
 PAYPAL_WEBHOOK_ID = os.getenv("PAYPAL_WEBHOOK_ID")
+PAYPAL_TIMEOUT = float(os.getenv("PAYPAL_HTTP_TIMEOUT", "10"))
 
 
 def _get_access_token():
+    if not PAYPAL_CLIENT_ID or not PAYPAL_SECRET:
+        raise RuntimeError("PayPal credentials are not configured")
     response = requests.post(
         f"{PAYPAL_BASE}/v1/oauth2/token",
         auth=(PAYPAL_CLIENT_ID, PAYPAL_SECRET),
         data={"grant_type": "client_credentials"},
+        timeout=PAYPAL_TIMEOUT,
     )
     response.raise_for_status()
     return response.json()["access_token"]
@@ -30,7 +34,7 @@ def create_order(amount: float, return_url: str, cancel_url: str):
         ],
         "application_context": {"return_url": return_url, "cancel_url": cancel_url},
     }
-    r = requests.post(f"{PAYPAL_BASE}/v2/checkout/orders", json=payload, headers=headers)
+    r = requests.post(f"{PAYPAL_BASE}/v2/checkout/orders", json=payload, headers=headers, timeout=PAYPAL_TIMEOUT)
     r.raise_for_status()
     return r.json()
 
@@ -41,7 +45,7 @@ def capture_order(order_id: str):
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
     }
-    r = requests.post(f"{PAYPAL_BASE}/v2/checkout/orders/{order_id}/capture", headers=headers)
+    r = requests.post(f"{PAYPAL_BASE}/v2/checkout/orders/{order_id}/capture", headers=headers, timeout=PAYPAL_TIMEOUT)
     r.raise_for_status()
     return r.json()
 
@@ -65,6 +69,7 @@ def verify_webhook(headers: dict, body: dict) -> bool:
         f"{PAYPAL_BASE}/v1/notifications/verify-webhook-signature",
         json=payload,
         headers=verify_headers,
+        timeout=PAYPAL_TIMEOUT,
     )
     r.raise_for_status()
     data = r.json()

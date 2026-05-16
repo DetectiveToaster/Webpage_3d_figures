@@ -15,6 +15,8 @@ from .security import hash_password, verify_password
 # Secret key to encode the JWT tokens
 SECRET_KEY = os.getenv("SECRET_KEY")
 if not SECRET_KEY:
+    if os.getenv("APP_ENV", "development").lower() in {"prod", "production"}:
+        raise RuntimeError("SECRET_KEY must be set in production")
     SECRET_KEY = "dev-secret-key"
     warnings.warn("SECRET_KEY is not set; using insecure dev-secret-key", RuntimeWarning)
 

@@ -55,6 +55,13 @@ class Product(Base):
     discounted_price = Column(Numeric(10, 2), nullable=True)
     is_visible = Column(Boolean, nullable=False, default=True)
     status = Column(String(20), nullable=False, default="published")  # draft | published
+    production_type = Column(String(30), nullable=False, default="in_stock")
+    material = Column(String, nullable=True)
+    color = Column(String, nullable=True)
+    scale = Column(String, nullable=True)
+    estimated_production_days = Column(Integer, nullable=True)
+    requires_manual_review = Column(Boolean, nullable=False, default=False)
+    weight_grams = Column(Integer, nullable=True)
     view_count = Column(Integer, nullable=False, default=0)
     sold_count = Column(Integer, nullable=False, default=0)
     last_viewed_at = Column(DateTime, nullable=True)
@@ -160,24 +167,38 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_number = Column(String, unique=True, nullable=True, index=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete="SET NULL"), nullable=True)
+    subtotal = Column(Numeric(10, 2), nullable=False, default=0)
+    shipping_cost = Column(Numeric(10, 2), nullable=False, default=0)
     total_cost = Column(Numeric(10, 2), nullable=False)
     currency = Column(String(3), nullable=False, default="USD")
     date = Column(DateTime, default=datetime.utcnow)
     status = Column(String, nullable=False)
+    payment_method = Column(String(30), nullable=False, default="bizum")
+    payment_status = Column(String(30), nullable=False, default="PENDING")
+    payment_reference = Column(String, nullable=True)
+    payment_instructions = Column(Text, nullable=True)
+    paid_at = Column(DateTime, nullable=True)
     paypal_order_id = Column(String, nullable=True)
     
     # Fields for guest users
     guest_email = Column(String, nullable=True)
     guest_address = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    customer_notes = Column(Text, nullable=True)
+    admin_notes = Column(Text, nullable=True)
     shipping_address_line1 = Column(String, nullable=True)
     shipping_address_line2 = Column(String, nullable=True)
     shipping_city = Column(String, nullable=True)
     shipping_state = Column(String, nullable=True)
     shipping_postal_code = Column(String, nullable=True)
     shipping_country_code = Column(String(2), nullable=True)
+    tracking_number = Column(String, nullable=True)
+    shipping_carrier = Column(String, nullable=True)
+    shipped_at = Column(DateTime, nullable=True)
 
     user = relationship("User", back_populates="orders")
     products = relationship("OrderProduct", back_populates="order", cascade="all, delete-orphan", passive_deletes=True)
+    attachments = relationship("OrderAttachment", back_populates="order", cascade="all, delete-orphan", passive_deletes=True)
 
 class OrderProduct(Base):
     __tablename__ = "order_products"
@@ -215,6 +236,41 @@ Index('ix_products_visible', Product.is_visible)
 Index('ix_products_created_at', Product.created_at)
 Index('ix_orders_user_date', Order.user_id, Order.date)
 Index('ix_order_products_order', OrderProduct.order_id)
+
+
+class OrderAttachment(Base):
+    __tablename__ = "order_attachments"
+
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey("orders.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = Column(String, nullable=False)
+    content_type = Column(String, nullable=False)
+    role = Column(String, nullable=True)
+    data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    order = relationship("Order", back_populates="attachments")
+
+
+class ShippingRateRule(Base):
+    __tablename__ = "shipping_rate_rules"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    country_code = Column(String(2), nullable=False)
+    postal_prefix = Column(String, nullable=True)
+    currency = Column(String(3), nullable=False, default="EUR")
+    base_cost = Column(Numeric(10, 2), nullable=False, default=0)
+    per_item_cost = Column(Numeric(10, 2), nullable=False, default=0)
+    per_kg_cost = Column(Numeric(10, 2), nullable=False, default=0)
+    free_shipping_min_subtotal = Column(Numeric(10, 2), nullable=True)
+    estimated_delivery_days = Column(Integer, nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+Index('ix_order_attachments_order', OrderAttachment.order_id)
+Index('ix_shipping_rules_lookup', ShippingRateRule.country_code, ShippingRateRule.postal_prefix, ShippingRateRule.is_active)
 
 
 # Upload session staging (for batch uploads)

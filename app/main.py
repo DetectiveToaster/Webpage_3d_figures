@@ -1,13 +1,16 @@
 # app/main.py
 
 from fastapi import FastAPI, Depends, HTTPException, status, File, Form, UploadFile, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
+from decimal import Decimal
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel
+from urllib.parse import quote
 from . import crud, models, schemas, auth, paypal, shipping
 from .database import SessionLocal, engine
 from .auth import authenticate_user, create_access_token, get_current_active_user, admin_required
@@ -20,16 +23,84 @@ if os.getenv("RUN_CREATE_ALL") == "true":
 
 app = FastAPI()
 
+def _cors_origins() -> List[str]:
+    value = os.getenv("CORS_ORIGINS")
+    if value:
+        return [origin.strip() for origin in value.split(",") if origin.strip()]
+    return ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],  # extend with your frontend origin(s) in prod
+    allow_origins=_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(150 * 1024 * 1024)))
+ALLOWED_UPLOAD_TYPES_BY_EXTENSION = {
+    ".jpg": {"image/jpeg"},
+    ".jpeg": {"image/jpeg"},
+    ".png": {"image/png"},
+    ".webp": {"image/webp"},
+    ".gif": {"image/gif"},
+    ".glb": {"model/gltf-binary", "application/octet-stream"},
+    ".gltf": {"model/gltf+json", "application/json", "application/octet-stream"},
+    ".pdf": {"application/pdf"},
+    ".stl": {"model/stl", "application/sla", "application/vnd.ms-pki.stl", "application/octet-stream"},
+}
+ALLOWED_UPLOAD_TYPES = {
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
+    "model/gltf-binary",
+    "model/gltf+json",
+    "application/pdf",
+    "model/stl",
+    "application/sla",
+    "application/vnd.ms-pki.stl",
+    "application/octet-stream",
+}
+STL_CONTENT_TYPES = ALLOWED_UPLOAD_TYPES_BY_EXTENSION[".stl"]
+
+
+def normalise_upload_metadata(file: UploadFile) -> tuple[str, str]:
+    filename = os.path.basename(file.filename or "")
+    extension = os.path.splitext(filename)[1].lower()
+    content_type = file.content_type or "application/octet-stream"
+    allowed_types = ALLOWED_UPLOAD_TYPES_BY_EXTENSION.get(extension)
+    if not filename or allowed_types is None:
+        raise HTTPException(status_code=400, detail="File extension is not allowed")
+    if content_type not in allowed_types:
+        raise HTTPException(status_code=400, detail="File type does not match the file extension")
+    if extension == ".stl" and content_type == "application/octet-stream":
+        content_type = "model/stl"
+    return filename, content_type
+
+
+def read_limited_upload(file: UploadFile) -> bytes:
+    data = file.file.read(MAX_UPLOAD_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File is too large")
+    return data
+
+
+def paypal_configured() -> bool:
+    return bool(os.getenv("ENABLE_PAYPAL") == "true" and os.getenv("PAYPAL_CLIENT_ID") and os.getenv("PAYPAL_SECRET"))
+
+
+def require_paypal_configured():
+    if not paypal_configured():
+        raise HTTPException(status_code=503, detail="Payment provider not configured")
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 # Dependency to get DB session
 def get_db_session():
@@ -67,8 +138,12 @@ def create_admin_user():
             is_admin=True
         )
         db.add(admin_user)
-        db.commit()
-        print(f"Admin user '{admin_email}' created.")
+        try:
+            db.commit()
+            print(f"Admin user '{admin_email}' created.")
+        except IntegrityError:
+            db.rollback()
+            print(f"Admin user '{admin_email}' already exists.")
     else:
         print(f"Admin user '{admin_email}' already exists.")
     db.close()
@@ -124,15 +199,56 @@ def read_products(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_s
     return products
 
 @app.post("/shipping/quote", response_model=schemas.ShippingQuoteResponse)
-def calculate_shipping_quote(payload: schemas.ShippingQuoteRequest):
+def calculate_shipping_quote(payload: schemas.ShippingQuoteRequest, db: Session = Depends(get_db_session)):
+    if os.getenv("ENABLE_CARRIER_SHIPPING") != "true":
+        estimated = crud.estimate_shipping_cost(
+            db,
+            payload.destination.country_code,
+            payload.destination.postal_code,
+            Decimal("0.00"),
+            1,
+            int(payload.package.weight_kg * 1000),
+            payload.currency,
+        )
+        return {
+            "quotes": [
+                schemas.ShippingQuote(
+                    carrier="manual",
+                    service="Manual estimate",
+                    cost=float(estimated[0]),
+                    currency=payload.currency,
+                    estimated_delivery_days=estimated[1],
+                    raw={"source": "manual_estimator"},
+                )
+            ],
+            "errors": {},
+        }
     quotes, errors = shipping.get_shipping_quotes(payload)
     if not quotes and errors:
         raise HTTPException(status_code=502, detail={"message": "No shipping rates available", "errors": errors})
     return {"quotes": quotes, "errors": errors}
 
+
+@app.post("/shipping/estimate", response_model=schemas.ManualShippingEstimate)
+def estimate_checkout_shipping(payload: schemas.ManualShippingEstimateRequest, db: Session = Depends(get_db_session)):
+    try:
+        _, subtotal, shipping_cost, total_cost, estimated_days = crud.estimate_checkout(db, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "subtotal": float(subtotal),
+        "shipping_cost": float(shipping_cost),
+        "total_cost": float(total_cost),
+        "currency": payload.currency,
+        "estimated_delivery_days": estimated_days,
+    }
+
 # Public: register a product view (call from product page render)
 @app.post("/products/{product_id}/view", response_model=schemas.Product)
 def register_product_view(product_id: int, db: Session = Depends(get_db_session)):
+    product = crud.get_product(db, product_id)
+    if product is None or not product.is_visible or product.status != "published":
+        raise HTTPException(status_code=404, detail="Product not found")
     db_product = crud.increment_product_view(db, product_id)
     if db_product is None:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -198,7 +314,7 @@ def highlighted_products(limit: int = 12, db: Session = Depends(get_db_session))
 @app.get("/products/{product_id}", response_model=schemas.Product)
 def get_product(product_id: int, db: Session = Depends(get_db_session)):
     db_product = crud.get_product(db, product_id=product_id)
-    if db_product is None:
+    if db_product is None or not db_product.is_visible or db_product.status != "published":
         raise HTTPException(status_code=404, detail="Product not found")
     return db_product
 
@@ -227,6 +343,9 @@ def get_media_for_product(
     product_id: int,
     db: Session = Depends(get_db_session),
 ):
+    db_product = crud.get_product(db, product_id=product_id)
+    if db_product is None or not db_product.is_visible or db_product.status != "published":
+        raise HTTPException(status_code=404, detail="Product not found")
     return crud.get_media_for_product(db=db, product_id=product_id)
 
 @app.delete("/product_media/{media_id}", response_model=schemas.ProductMedia)
@@ -248,14 +367,16 @@ def upload_product_media(
     db: Session = Depends(get_db_session),
     current_user: models.User = Depends(admin_required),  # Admin only
 ):
-    file_bytes = file.file.read()
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="Empty file")
+    filename, content_type = normalise_upload_metadata(file)
+    db_product = crud.get_product(db, product_id)
+    if not db_product:
+        raise HTTPException(status_code=404, detail="Product not found")
+    file_bytes = read_limited_upload(file)
     db_media = models.ProductMedia(
         product_id=product_id,
         kind=media_type,
-        filename=file.filename,
-        content_type=file.content_type or "application/octet-stream",
+        filename=filename,
+        content_type=content_type,
         data=file_bytes,
     )
     db.add(db_media)
@@ -288,12 +409,13 @@ def add_file_to_upload(
     db: Session = Depends(get_db_session),
     current_user: models.User = Depends(admin_required),
 ):
-    data = file.file.read()
+    filename, content_type = normalise_upload_metadata(file)
+    data = read_limited_upload(file)
     rec = crud.add_file_to_session(
         db,
         session_id=upload_id,
-        filename=file.filename,
-        content_type=file.content_type or "application/octet-stream",
+        filename=filename,
+        content_type=content_type,
         role=role,
         sort_order=sort_order or 0,
         data=data,
@@ -326,12 +448,15 @@ def delete_upload(upload_id: int, db: Session = Depends(get_db_session), current
 @app.get("/media/{media_id}")
 def get_media_file(media_id: int, db: Session = Depends(get_db_session)):
     media = db.query(models.ProductMedia).filter(models.ProductMedia.id == media_id).first()
-    if not media:
+    if not media or not media.product or not media.product.is_visible or media.product.status != "published":
         raise HTTPException(status_code=404, detail="Media not found")
     return Response(
         content=media.data,
         media_type=media.content_type,
-        headers={"Content-Disposition": f"inline; filename={media.filename}"}
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{quote(media.filename)}",
+            "X-Content-Type-Options": "nosniff",
+        }
     )
 
 # Secure endpoint to create a new category
@@ -345,20 +470,133 @@ def read_categories(skip: int = 0, limit: int = 10, db: Session = Depends(get_db
     categories = crud.get_categories(db, skip=skip, limit=limit)
     return categories
 
-# Secure endpoint to create a new order
+# Secure endpoint to create a new order for the current user
 @app.post("/orders/", response_model=schemas.Order)
-def create_order(order: schemas.OrderBase, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
-    return crud.create_order(db=db, order=order)
+def create_order(order: schemas.OrderCreate, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
+    try:
+        return crud.create_order_for_user(db=db, user_id=current_user.id, order=order)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-# Public endpoint to get a list of orders (usually this would be secure, but depends on your needs)
+# Admin endpoint to get a list of all orders
 @app.get("/orders/", response_model=List[schemas.Order])
-def read_orders(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_session)):
-    orders = crud.get_orders(db, skip=skip, limit=limit)
+def read_orders(
+    skip: int = 0,
+    limit: int = 10,
+    status: Optional[str] = None,
+    payment_status: Optional[str] = None,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    orders = crud.get_orders(db, skip=skip, limit=limit, status=status, payment_status=payment_status)
     return orders
+
+@app.get("/orders/me", response_model=List[schemas.Order])
+def read_my_orders(skip: int = 0, limit: int = 10, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
+    return crud.get_orders_for_user(db, user_id=current_user.id, skip=skip, limit=limit)
+
+@app.get("/orders/{order_id}", response_model=schemas.Order)
+def read_order(order_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
+    order = crud.get_order(db, order_id) if current_user.is_admin else crud.get_order_for_user(db, order_id, current_user.id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
 
 @app.post("/guest_orders/", response_model=schemas.Order)
 def create_guest_order(order: schemas.GuestOrderBase, db: Session = Depends(get_db_session)):
-    return crud.create_guest_order(db=db, order=order)
+    try:
+        return crud.create_guest_order(db=db, order=order)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/guest_orders/{order_number}", response_model=schemas.Order)
+def read_guest_order(order_number: str, email: str, db: Session = Depends(get_db_session)):
+    order = crud.get_order_by_number(db, order_number)
+    if not order or (order.guest_email or "").lower() != email.lower():
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@app.get("/admin/orders/{order_id}", response_model=schemas.Order)
+def read_admin_order(order_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    order = crud.get_order(db, order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@app.get("/admin/orders/by-number/{order_number}", response_model=schemas.Order)
+def read_admin_order_by_number(order_number: str, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    order = crud.get_order_by_number(db, order_number)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@app.patch("/admin/orders/{order_id}", response_model=schemas.Order)
+def update_admin_order(
+    order_id: int,
+    payload: schemas.OrderAdminUpdate,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    try:
+        order = crud.update_order_admin(db, order_id, payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@app.post("/admin/orders/{order_id}/mark-paid", response_model=schemas.Order)
+def mark_order_paid(order_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    order = crud.update_order_admin(db, order_id, schemas.OrderAdminUpdate(payment_status="PAID"))
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+
+@app.post("/admin/orders/{order_id}/attachments", response_model=schemas.OrderAttachment)
+def upload_order_attachment(
+    order_id: int,
+    role: str = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    filename, content_type = normalise_upload_metadata(file)
+    attachment = crud.add_order_attachment(db, order_id, filename, content_type, role, read_limited_upload(file))
+    if not attachment:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return attachment
+
+
+@app.post("/admin/shipping-rules", response_model=schemas.ShippingRateRule)
+def create_shipping_rule(rule: schemas.ShippingRateRuleCreate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    return crud.create_shipping_rate_rule(db, rule)
+
+
+@app.get("/admin/shipping-rules", response_model=List[schemas.ShippingRateRule])
+def list_shipping_rules(skip: int = 0, limit: int = 100, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    return crud.get_shipping_rate_rules(db, skip=skip, limit=limit)
+
+
+@app.patch("/admin/shipping-rules/{rule_id}", response_model=schemas.ShippingRateRule)
+def update_shipping_rule(rule_id: int, payload: schemas.ShippingRateRuleUpdate, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    rule = crud.update_shipping_rate_rule(db, rule_id, payload)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Shipping rule not found")
+    return rule
+
+
+@app.delete("/admin/shipping-rules/{rule_id}", response_model=schemas.ShippingRateRule)
+def delete_shipping_rule(rule_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
+    rule = crud.delete_shipping_rate_rule(db, rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail="Shipping rule not found")
+    return rule
 
 # PayPal integration endpoints
 
@@ -367,8 +605,11 @@ class CreatePayPalOrder(BaseModel):
 
 
 @app.post("/paypal/create-order")
-def paypal_create_order(payload: CreatePayPalOrder):
-    """Create a PayPal order directly from the frontend."""
+def paypal_create_order(payload: CreatePayPalOrder, current_user: models.User = Depends(admin_required)):
+    """Admin-only utility for creating a PayPal order with an explicit amount."""
+    require_paypal_configured()
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than zero")
     return paypal.create_order(
         amount=payload.amount,
         return_url=os.getenv("PAYPAL_RETURN_URL", "https://example.com/success"),
@@ -377,9 +618,12 @@ def paypal_create_order(payload: CreatePayPalOrder):
 
 
 @app.post("/paypal/order/{order_id}")
-def create_paypal_order(order_id: int, db: Session = Depends(get_db_session)):
+def create_paypal_order(order_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
+    require_paypal_configured()
     order = crud.get_order(db, order_id)
     if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not current_user.is_admin and order.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Order not found")
     res = paypal.create_order(
         amount=float(order.total_cost),
@@ -391,13 +635,22 @@ def create_paypal_order(order_id: int, db: Session = Depends(get_db_session)):
 
 
 @app.post("/paypal/capture-order/{paypal_order_id}")
-def capture_paypal_order(paypal_order_id: str):
+def capture_paypal_order(paypal_order_id: str, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
     """Capture a previously created PayPal order."""
-    return paypal.capture_order(paypal_order_id)
+    require_paypal_configured()
+    order = crud.get_order_by_paypal_id(db, paypal_order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if not current_user.is_admin and order.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    result = paypal.capture_order(paypal_order_id)
+    crud.update_order_status(db, order.id, "COMPLETED")
+    return result
 
 
 @app.post("/paypal/webhook")
 async def paypal_webhook(request: Request, db: Session = Depends(get_db_session)):
+    require_paypal_configured()
     body = await request.json()
     if not paypal.verify_webhook(request.headers, body):
         raise HTTPException(status_code=400, detail="Invalid webhook")
@@ -406,7 +659,7 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db_session)
         order_id = body["resource"]["id"]
         order = crud.get_order_by_paypal_id(db, order_id)
         if order:
-            crud.update_order_status(db, order.id, "APPROVED")
+            crud.update_order_status(db, order.id, "PAYMENT_RECEIVED")
     elif event_type == "PAYMENT.CAPTURE.COMPLETED":
         related = body["resource"].get("supplementary_data", {}).get("related_ids", {})
         order_id = related.get("order_id")
@@ -419,7 +672,10 @@ async def paypal_webhook(request: Request, db: Session = Depends(get_db_session)
 # Secure endpoint to add an item to the cart
 @app.post("/cart/", response_model=schemas.Cart)
 def add_to_cart(cart: schemas.CartBase, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
-    return crud.add_to_cart(db=db, cart=cart)
+    try:
+        return crud.add_to_cart(db=db, user_id=current_user.id, cart=cart)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 # Secure endpoint to view the cart of the current user
 @app.get("/cart/", response_model=List[schemas.Cart])
@@ -428,8 +684,17 @@ def read_cart(db: Session = Depends(get_db_session), current_user: models.User =
 
 @app.put("/cart/{cart_id}", response_model=schemas.Cart)
 def update_cart_item(cart_id: int, quantity: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
-    return crud.update_cart_item(db, cart_id, quantity)
+    try:
+        cart_item = crud.update_cart_item(db, current_user.id, cart_id, quantity)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not cart_item:
+        raise HTTPException(status_code=404, detail="Cart item not found")
+    return cart_item
 
 @app.delete("/cart/{cart_id}", response_model=schemas.Cart)
 def delete_cart_item(cart_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(get_current_active_user)):
-    return crud.delete_cart_item(db, cart_id)
+    cart_item = crud.delete_cart_item(db, current_user.id, cart_id)
+    if not cart_item:
+        raise HTTPException(status_code=404, detail="Cart item not found")
+    return cart_item

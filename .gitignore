@@ -3,3 +3,4 @@ venv/
 pgdata/
 data/
 .vscode
+backend.env
