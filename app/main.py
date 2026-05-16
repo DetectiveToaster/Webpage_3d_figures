@@ -518,6 +518,18 @@ def read_guest_order(order_number: str, email: str, db: Session = Depends(get_db
     return order
 
 
+@app.get("/admin/orders", response_model=List[schemas.Order])
+def read_admin_orders(
+    skip: int = 0,
+    limit: int = 10,
+    status: Optional[schemas.OrderStatus] = None,
+    payment_status: Optional[schemas.PaymentStatus] = None,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    return crud.get_orders(db, skip=skip, limit=limit, status=status, payment_status=payment_status)
+
+
 @app.get("/admin/orders/{order_id}", response_model=schemas.Order)
 def read_admin_order(order_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
     order = crud.get_order(db, order_id)
@@ -534,13 +546,7 @@ def read_admin_order_by_number(order_number: str, db: Session = Depends(get_db_s
     return order
 
 
-@app.patch("/admin/orders/{order_id}", response_model=schemas.Order)
-def update_admin_order(
-    order_id: int,
-    payload: schemas.OrderAdminUpdate,
-    db: Session = Depends(get_db_session),
-    current_user: models.User = Depends(admin_required),
-):
+def _admin_update_order_or_404(db: Session, order_id: int, payload: schemas.OrderAdminUpdate) -> models.Order:
     try:
         order = crud.update_order_admin(db, order_id, payload)
     except ValueError as e:
@@ -550,12 +556,106 @@ def update_admin_order(
     return order
 
 
+@app.patch("/admin/orders/{order_id}", response_model=schemas.Order)
+def update_admin_order(
+    order_id: int,
+    payload: schemas.OrderAdminUpdate,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    return _admin_update_order_or_404(db, order_id, payload)
+
+
+@app.patch("/admin/orders/{order_id}/payment-received", response_model=schemas.Order)
+def mark_order_payment_received(
+    order_id: int,
+    payload: Optional[schemas.AdminOrderNotesUpdate] = None,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    return _admin_update_order_or_404(
+        db,
+        order_id,
+        schemas.OrderAdminUpdate(
+            payment_status="PAID",
+            admin_notes=payload.admin_notes if payload else None,
+        ),
+    )
+
+
+@app.patch("/admin/orders/{order_id}/move-to-production", response_model=schemas.Order)
+def move_order_to_production(
+    order_id: int,
+    payload: Optional[schemas.AdminOrderNotesUpdate] = None,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    return _admin_update_order_or_404(
+        db,
+        order_id,
+        schemas.OrderAdminUpdate(
+            status="IN_PRODUCTION",
+            admin_notes=payload.admin_notes if payload else None,
+        ),
+    )
+
+
+@app.patch("/admin/orders/{order_id}/ready", response_model=schemas.Order)
+def mark_order_ready(
+    order_id: int,
+    payload: Optional[schemas.AdminOrderNotesUpdate] = None,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    return _admin_update_order_or_404(
+        db,
+        order_id,
+        schemas.OrderAdminUpdate(
+            status="READY",
+            admin_notes=payload.admin_notes if payload else None,
+        ),
+    )
+
+
+@app.patch("/admin/orders/{order_id}/shipped", response_model=schemas.Order)
+def mark_order_shipped(
+    order_id: int,
+    payload: Optional[schemas.AdminOrderShippedUpdate] = None,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    return _admin_update_order_or_404(
+        db,
+        order_id,
+        schemas.OrderAdminUpdate(
+            status="SHIPPED",
+            admin_notes=payload.admin_notes if payload else None,
+            tracking_number=payload.tracking_number if payload else None,
+            shipping_carrier=payload.shipping_carrier if payload else None,
+        ),
+    )
+
+
+@app.patch("/admin/orders/{order_id}/cancel", response_model=schemas.Order)
+def cancel_order(
+    order_id: int,
+    payload: Optional[schemas.AdminOrderNotesUpdate] = None,
+    db: Session = Depends(get_db_session),
+    current_user: models.User = Depends(admin_required),
+):
+    return _admin_update_order_or_404(
+        db,
+        order_id,
+        schemas.OrderAdminUpdate(
+            status="CANCELLED",
+            admin_notes=payload.admin_notes if payload else None,
+        ),
+    )
+
+
 @app.post("/admin/orders/{order_id}/mark-paid", response_model=schemas.Order)
 def mark_order_paid(order_id: int, db: Session = Depends(get_db_session), current_user: models.User = Depends(admin_required)):
-    order = crud.update_order_admin(db, order_id, schemas.OrderAdminUpdate(payment_status="PAID"))
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    return order
+    return _admin_update_order_or_404(db, order_id, schemas.OrderAdminUpdate(payment_status="PAID"))
 
 
 @app.post("/admin/orders/{order_id}/attachments", response_model=schemas.OrderAttachment)

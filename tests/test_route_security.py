@@ -99,6 +99,149 @@ class RouteSecurityTests(unittest.TestCase):
         self.assertEqual(order.payment_reference, order.order_number)
         self.assertIsNone(order.paypal_order_id)
 
+    def test_openapi_exposes_manual_checkout_contract(self):
+        routes.app.openapi_schema = None
+        schema = routes.app.openapi()
+
+        required_paths = {
+            "/shipping/estimate",
+            "/admin/orders",
+            "/admin/orders/{order_id}/payment-received",
+            "/admin/orders/{order_id}/move-to-production",
+            "/admin/orders/{order_id}/ready",
+            "/admin/orders/{order_id}/shipped",
+            "/admin/orders/{order_id}/cancel",
+        }
+        self.assertTrue(required_paths.issubset(schema["paths"].keys()))
+
+        order_create = schema["components"]["schemas"]["OrderCreate"]["properties"]
+        guest_order = schema["components"]["schemas"]["GuestOrderBase"]["properties"]
+        order_response = schema["components"]["schemas"]["Order"]["properties"]
+        product_base = schema["components"]["schemas"]["ProductBase"]["properties"]
+
+        checkout_fields = {
+            "payment_method",
+            "phone",
+            "customer_notes",
+            "shipping_address_line1",
+            "shipping_address_line2",
+            "shipping_city",
+            "shipping_state",
+            "shipping_postal_code",
+            "shipping_country_code",
+            "products",
+        }
+        self.assertTrue(checkout_fields.issubset(order_create.keys()))
+        self.assertTrue(checkout_fields.issubset(guest_order.keys()))
+        self.assertTrue(
+            {
+                "order_number",
+                "payment_method",
+                "payment_status",
+                "payment_reference",
+                "payment_instructions",
+                "subtotal",
+                "shipping_cost",
+                "total_cost",
+                "customer_notes",
+                "phone",
+                "tracking_number",
+                "shipping_carrier",
+                "admin_notes",
+            }.issubset(order_response.keys())
+        )
+        self.assertEqual(order_create["payment_method"]["enum"], ["bizum", "bank_transfer", "manual"])
+        self.assertEqual(product_base["production_type"]["enum"], ["in_stock", "made_to_order", "custom"])
+
+    def test_shipping_estimate_does_not_create_order(self):
+        estimate = routes.estimate_checkout_shipping(
+            routes.schemas.ManualShippingEstimateRequest(
+                currency="USD",
+                products=[{"product_id": self.product.id, "quantity": 2}],
+            ),
+            db=self.db,
+        )
+
+        self.assertEqual(estimate["subtotal"], 40.0)
+        self.assertEqual(estimate["shipping_cost"], 5.0)
+        self.assertEqual(estimate["total_cost"], 45.0)
+        self.assertEqual(self.db.query(models.Order).count(), 0)
+
+    def test_admin_order_lifecycle_endpoints(self):
+        order = routes.create_guest_order(
+            routes.schemas.GuestOrderBase(
+                guest_email="buyer@example.com",
+                guest_address="Street 1",
+                currency="USD",
+                products=[{"product_id": self.product.id, "quantity": 1}],
+            ),
+            db=self.db,
+        )
+
+        filtered = routes.read_admin_orders(
+            status="AWAITING_PAYMENT",
+            payment_status="PENDING",
+            db=self.db,
+            current_user=self.admin,
+        )
+        self.assertEqual([item.id for item in filtered], [order.id])
+
+        paid = routes.mark_order_payment_received(
+            order.id,
+            routes.schemas.AdminOrderNotesUpdate(admin_notes="Bizum received"),
+            db=self.db,
+            current_user=self.admin,
+        )
+        self.assertEqual(paid.status, "PAYMENT_RECEIVED")
+        self.assertEqual(paid.payment_status, "PAID")
+        self.assertEqual(paid.admin_notes, "Bizum received")
+
+        production = routes.move_order_to_production(order.id, db=self.db, current_user=self.admin)
+        self.assertEqual(production.status, "IN_PRODUCTION")
+
+        ready = routes.mark_order_ready(order.id, db=self.db, current_user=self.admin)
+        self.assertEqual(ready.status, "READY")
+
+        shipped = routes.mark_order_shipped(
+            order.id,
+            routes.schemas.AdminOrderShippedUpdate(
+                tracking_number="TRACK123",
+                shipping_carrier="manual",
+                admin_notes="Handed to carrier",
+            ),
+            db=self.db,
+            current_user=self.admin,
+        )
+        self.assertEqual(shipped.status, "SHIPPED")
+        self.assertEqual(shipped.tracking_number, "TRACK123")
+        self.assertEqual(shipped.shipping_carrier, "manual")
+        self.assertIsNotNone(shipped.shipped_at)
+
+    def test_admin_cancel_endpoint_releases_inventory(self):
+        order = routes.create_guest_order(
+            routes.schemas.GuestOrderBase(
+                guest_email="buyer@example.com",
+                guest_address="Street 1",
+                currency="USD",
+                products=[{"product_id": self.product.id, "quantity": 2}],
+            ),
+            db=self.db,
+        )
+        self.db.refresh(self.product)
+        self.assertEqual(self.product.quantity, 3)
+
+        cancelled = routes.cancel_order(
+            order.id,
+            routes.schemas.AdminOrderNotesUpdate(admin_notes="Customer changed mind"),
+            db=self.db,
+            current_user=self.admin,
+        )
+        self.db.refresh(self.product)
+
+        self.assertEqual(cancelled.status, "CANCELLED")
+        self.assertEqual(cancelled.admin_notes, "Customer changed mind")
+        self.assertEqual(self.product.quantity, 5)
+
     def test_hidden_product_and_media_are_not_public(self):
         with self.assertRaises(HTTPException) as product_ctx:
             routes.get_product(self.hidden_product.id, db=self.db)

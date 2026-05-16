@@ -1,6 +1,20 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from datetime import datetime
+
+PaymentMethod = Literal["bizum", "bank_transfer", "manual"]
+PaymentStatus = Literal["PENDING", "PAID", "FAILED", "REFUNDED"]
+OrderStatus = Literal[
+    "AWAITING_PAYMENT",
+    "PAYMENT_RECEIVED",
+    "IN_PRODUCTION",
+    "READY",
+    "SHIPPED",
+    "COMPLETED",
+    "CANCELLED",
+    "EXPIRED",
+]
+ProductionType = Literal["in_stock", "made_to_order", "custom"]
 
 class UserBase(BaseModel):
     email: str
@@ -73,13 +87,13 @@ class ProductBase(BaseModel):
     discount: Optional[float] = Field(None, ge=0)
     discounted_price: Optional[float] = Field(None, ge=0)
     is_visible: bool = True
-    production_type: str = "in_stock"
-    material: Optional[str] = None
-    color: Optional[str] = None
-    scale: Optional[str] = None
-    estimated_production_days: Optional[int] = Field(None, ge=0)
-    requires_manual_review: bool = False
-    weight_grams: Optional[int] = Field(None, ge=0)
+    production_type: ProductionType = Field("in_stock", description="How this product is fulfilled.")
+    material: Optional[str] = Field(None, description="Production material, e.g. resin, PLA, paper.")
+    color: Optional[str] = Field(None, description="Default product color or finish.")
+    scale: Optional[str] = Field(None, description="Scale for figures/models, e.g. 1/8.")
+    estimated_production_days: Optional[int] = Field(None, ge=0, description="Expected production time before shipping.")
+    requires_manual_review: bool = Field(False, description="Whether admin review is required before fulfillment.")
+    weight_grams: Optional[int] = Field(None, ge=0, description="Estimated item weight used by manual shipping rules.")
 
     @field_validator("production_type")
     def validate_production_type(cls, value: str) -> str:
@@ -189,9 +203,9 @@ class OrderBase(BaseModel):
     shipping_cost: float = 0
     total_cost: float
     currency: str = "USD"
-    status: str
-    payment_method: str = "bizum"
-    payment_status: str = "PENDING"
+    status: OrderStatus
+    payment_method: PaymentMethod = "bizum"
+    payment_status: PaymentStatus = "PENDING"
     payment_reference: Optional[str] = None
     payment_instructions: Optional[str] = None
     paid_at: Optional[datetime] = None
@@ -213,9 +227,9 @@ class OrderBase(BaseModel):
 
 class CheckoutBase(BaseModel):
     currency: str = Field("USD", min_length=3, max_length=3)
-    payment_method: str = "bizum"
-    phone: Optional[str] = None
-    customer_notes: Optional[str] = None
+    payment_method: PaymentMethod = Field("bizum", description="Manual payment method selected by the customer.")
+    phone: Optional[str] = Field(None, description="Customer contact phone for manual fulfillment.")
+    customer_notes: Optional[str] = Field(None, description="Optional customer message for custom or made-to-order products.")
     shipping_address_line1: Optional[str] = None
     shipping_address_line2: Optional[str] = None
     shipping_city: Optional[str] = None
@@ -292,10 +306,19 @@ class ManualShippingEstimate(BaseModel):
 
 
 class OrderAdminUpdate(BaseModel):
-    status: Optional[str] = None
-    payment_status: Optional[str] = None
+    status: Optional[OrderStatus] = None
+    payment_status: Optional[PaymentStatus] = None
     payment_reference: Optional[str] = None
     admin_notes: Optional[str] = None
+    tracking_number: Optional[str] = None
+    shipping_carrier: Optional[str] = None
+
+
+class AdminOrderNotesUpdate(BaseModel):
+    admin_notes: Optional[str] = None
+
+
+class AdminOrderShippedUpdate(AdminOrderNotesUpdate):
     tracking_number: Optional[str] = None
     shipping_carrier: Optional[str] = None
 
